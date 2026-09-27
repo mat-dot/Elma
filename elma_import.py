@@ -6,6 +6,7 @@ import os
 from typing import Any
 
 from elma_db import conectar, filtrar_achados_novos
+from elma_guardrails import mascarar_segredos
 from elma_severity import normalizar_severidade
 
 TAMANHO_MAXIMO_SARIF = 25 * 1024 * 1024
@@ -112,6 +113,12 @@ def parse_sarif(documento: dict[str, Any]) -> list[dict[str, Any]]:
                 uri = artifact.get("uri", "")
                 if not isinstance(uri, str):
                     raise ValueError("URI de artefato deve ser texto")
+                snippet_text = snippet.get("text", "")
+                possivel_segredo = any(
+                    mascarar_segredos(texto or "") != (texto or "")
+                    for texto in (message_text, snippet_text, uri)
+                    if isinstance(texto, str)
+                )
 
                 findings.append(
                     {
@@ -120,8 +127,9 @@ def parse_sarif(documento: dict[str, Any]) -> list[dict[str, Any]]:
                         "start": {"line": region.get("startLine", 0)},
                         "extra": {
                             "message": message_text,
-                            "lines": snippet.get("text", ""),
+                            "lines": snippet_text,
                         },
+                        "possivel_segredo": possivel_segredo,
                         "tool_name": tool_name,
                         "severity": normalizar_severidade(severity),
                         "source_format": "SARIF 2.1.0",
@@ -155,11 +163,15 @@ def carregar_sarif(caminho_arquivo: str) -> list[dict[str, Any]]:
 def importar_sarif_para_banco(
     caminho_arquivo: str,
     caminho_banco: str = "elma_findings.db",
+    repositorio: str | None = None,
 ) -> tuple[int, int]:
     """Importa um relatório e retorna total lido e findings apresentados."""
     resultados = carregar_sarif(caminho_arquivo)
     if not resultados:
         return 0, 0
+    if repositorio:
+        for achado in resultados:
+            achado["repositorio"] = repositorio
     conn = conectar(caminho_banco)
     try:
         apresentados = filtrar_achados_novos(resultados, conn)

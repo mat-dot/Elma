@@ -15,10 +15,12 @@ import re
 import sqlite3
 from datetime import datetime, timezone
 
+from elma_guardrails import mascarar_segredos
 from elma_severity import normalizar_severidade
 
 CAMINHO_BANCO_PADRAO = "elma_findings.db"
 MIGRACAO_SEVERIDADE_CANONICA = 1
+MIGRACAO_MASCARAMENTO_SEGREDOS = 2
 
 
 class FingerprintConflictError(ValueError):
@@ -55,7 +57,13 @@ def conectar(caminho_banco: str = CAMINHO_BANCO_PADRAO) -> sqlite3.Connection:
             severidade      TEXT,
             origem          TEXT,
             mensagem        TEXT,
-            repositorio     TEXT
+            repositorio     TEXT,
+            possivel_segredo INTEGER,
+            fingerprint_legado TEXT,
+            sugestao_ia TEXT,
+            confianca_ia INTEGER,
+            justificativa_ia TEXT,
+            sugestao_ia_gerada_em TEXT
         )
         """
     )
@@ -68,6 +76,12 @@ def conectar(caminho_banco: str = CAMINHO_BANCO_PADRAO) -> sqlite3.Connection:
         "origem": "TEXT",
         "mensagem": "TEXT",
         "repositorio": "TEXT",
+        "possivel_segredo": "INTEGER",
+        "fingerprint_legado": "TEXT",
+        "sugestao_ia": "TEXT",
+        "confianca_ia": "INTEGER",
+        "justificativa_ia": "TEXT",
+        "sugestao_ia_gerada_em": "TEXT",
     }
     for coluna, tipo in novas_colunas.items():
         if coluna not in colunas_existentes:
@@ -94,6 +108,73 @@ def conectar(caminho_banco: str = CAMINHO_BANCO_PADRAO) -> sqlite3.Connection:
         conn.execute(
             "INSERT INTO elma_schema_migrations (version) VALUES (?)",
             (MIGRACAO_SEVERIDADE_CANONICA,),
+        )
+    migracao_mascaramento_aplicada = conn.execute(
+        "SELECT 1 FROM elma_schema_migrations WHERE version = ?",
+        (MIGRACAO_MASCARAMENTO_SEGREDOS,),
+    ).fetchone()
+    if migracao_mascaramento_aplicada is None:
+        colunas_existentes = {
+            linha[1] for linha in conn.execute("PRAGMA table_info(findings)")
+        }
+        campos = (
+            "regra", "arquivo", "trecho", "mensagem", "repositorio",
+            "possivel_segredo",
+        )
+        selecao = ", ".join(
+            campo if campo in colunas_existentes else f"NULL AS {campo}"
+            for campo in campos
+        )
+        registros = conn.execute(
+            f"SELECT fingerprint, {selecao} FROM findings"
+        ).fetchall()
+        for (
+            fingerprint,
+            regra,
+            arquivo_original,
+            trecho_original,
+            mensagem_original,
+            repositorio,
+            flag_original,
+        ) in registros:
+            fingerprint_legado = _calcular_fingerprint_legado(
+                {
+                    "regra": regra,
+                    "arquivo": arquivo_original,
+                    "trecho": trecho_original,
+                    "mensagem": mensagem_original,
+                    "repositorio": repositorio,
+                }
+            )
+            arquivo = mascarar_segredos(arquivo_original or "")
+            trecho = mascarar_segredos(trecho_original or "")
+            mensagem = mascarar_segredos(mensagem_original or "")
+            possivel_segredo = bool(flag_original) or any(
+                mascarado != original
+                for mascarado, original in (
+                    (arquivo, arquivo_original or ""),
+                    (trecho, trecho_original or ""),
+                    (mensagem, mensagem_original or ""),
+                )
+            )
+            atualizacoes = ["fingerprint_legado = ?", "possivel_segredo = ?"]
+            valores = [fingerprint_legado, int(possivel_segredo)]
+            for coluna, valor in (
+                ("arquivo", arquivo),
+                ("trecho", trecho),
+                ("mensagem", mensagem),
+            ):
+                if coluna in colunas_existentes:
+                    atualizacoes.append(f"{coluna} = ?")
+                    valores.append(valor)
+            valores.append(fingerprint)
+            conn.execute(
+                f"UPDATE findings SET {', '.join(atualizacoes)} WHERE fingerprint = ?",
+                valores,
+            )
+        conn.execute(
+            "INSERT INTO elma_schema_migrations (version) VALUES (?)",
+            (MIGRACAO_MASCARAMENTO_SEGREDOS,),
         )
     conn.commit()
     return conn
@@ -172,6 +253,37 @@ def _criar_detalhe_conflito(
     }
 
 
+def _achado_mascarado(
+    achado: dict,
+    arquivo: str,
+    trecho: str,
+    mensagem: str,
+    possivel_segredo: bool,
+) -> dict:
+    """Return a sanitized copy for callers while leaving hash input untouched."""
+    resultado = dict(achado)
+    resultado["possivel_segredo"] = possivel_segredo
+    if "path" in resultado or "arquivo" not in resultado:
+        resultado["path"] = arquivo
+    if "arquivo" in resultado:
+        resultado["arquivo"] = arquivo
+    if "trecho" in resultado:
+        resultado["trecho"] = trecho
+    if "mensagem" in resultado:
+        resultado["mensagem"] = mensagem
+    if "message" in resultado:
+        resultado["message"] = mensagem
+    extra = resultado.get("extra")
+    if isinstance(extra, dict):
+        extra = dict(extra)
+        if "lines" in extra:
+            extra["lines"] = trecho
+        if "message" in extra:
+            extra["message"] = mensagem
+        resultado["extra"] = extra
+    return resultado
+
+
 def filtrar_achados_novos(resultados: list[dict], conn: sqlite3.Connection) -> list[dict]:
     """
     Recebe a lista crua de achados (o que motor_sast_resiliente devolve em ["results"])
@@ -213,14 +325,37 @@ def filtrar_achados_novos(resultados: list[dict], conn: sqlite3.Connection) -> l
         fp = calcular_fingerprint(achado)
         fp_legado = _calcular_fingerprint_legado(achado)
         linha = achado.get("start", {}).get("line", 0)
-        regra = achado.get("check_id") or achado.get("extra", {}).get("message", "")
-        arquivo = achado.get("path", "")
-        trecho = achado.get("extra", {}).get("lines", "")
+        regra = (
+            achado.get("check_id")
+            or achado.get("regra")
+            or "regra_desconhecida"
+        )
+        arquivo_original = achado.get("path") or achado.get("arquivo") or ""
+        trecho_original = achado.get("extra", {}).get("lines", achado.get("trecho", ""))
         ferramenta = achado.get("tool_name") or achado.get("ferramenta")
         severidade = achado.get("severity") or achado.get("severidade")
         origem = achado.get("source_format") or achado.get("origem")
-        mensagem = achado.get("extra", {}).get("message") or achado.get("message", "")
+        mensagem_original = (
+            achado.get("extra", {}).get("message")
+            or achado.get("message")
+            or achado.get("mensagem")
+            or ""
+        )
         repositorio = achado.get("repositorio")
+        arquivo = mascarar_segredos(arquivo_original or "")
+        trecho = mascarar_segredos(trecho_original or "")
+        mensagem = mascarar_segredos(mensagem_original or "")
+        possivel_segredo = bool(achado.get("possivel_segredo")) or any(
+            mascarado != original
+            for mascarado, original in (
+                (arquivo, arquivo_original or ""),
+                (trecho, trecho_original or ""),
+                (mensagem, mensagem_original or ""),
+            )
+        )
+        achado_saida = _achado_mascarado(
+            achado, arquivo, trecho, mensagem, possivel_segredo
+        )
 
         existente = conn.execute(
             "SELECT fingerprint, status FROM findings WHERE fingerprint = ?", (fp,)
@@ -235,12 +370,14 @@ def filtrar_achados_novos(resultados: list[dict], conn: sqlite3.Connection) -> l
             conn.execute(
                 """INSERT INTO findings
                          (fingerprint, regra, arquivo, linha, trecho, status, primeira_vez,
-                          ultima_vez, ferramenta, severidade, origem, mensagem, repositorio)
-                         VALUES (?, ?, ?, ?, ?, 'novo', ?, ?, ?, ?, ?, ?, ?)""",
+                          ultima_vez, ferramenta, severidade, origem, mensagem, repositorio,
+                          possivel_segredo, fingerprint_legado)
+                         VALUES (?, ?, ?, ?, ?, 'novo', ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                      (fp, regra, arquivo, linha, trecho, agora, agora, ferramenta,
-                      severidade, origem, mensagem, repositorio),
+                      severidade, origem, mensagem, repositorio,
+                      int(possivel_segredo), fp_legado),
             )
-            para_mostrar.append(achado)
+            para_mostrar.append(achado_saida)
         else:
             fingerprint_existente, status = existente
             conn.execute(
@@ -250,7 +387,9 @@ def filtrar_achados_novos(resultados: list[dict], conn: sqlite3.Connection) -> l
                        severidade = COALESCE(?, severidade),
                        origem = COALESCE(?, origem),
                        mensagem = COALESCE(?, mensagem),
-                       repositorio = COALESCE(?, repositorio)
+                       repositorio = COALESCE(?, repositorio),
+                       arquivo = ?, trecho = ?, possivel_segredo = ?,
+                       fingerprint_legado = COALESCE(fingerprint_legado, ?)
                    WHERE fingerprint = ?""",
                 (
                     agora,
@@ -259,6 +398,10 @@ def filtrar_achados_novos(resultados: list[dict], conn: sqlite3.Connection) -> l
                     origem or None,
                     mensagem or None,
                     repositorio or None,
+                    arquivo,
+                    trecho,
+                    int(possivel_segredo),
+                    fp_legado,
                     fingerprint_existente,
                 ),
             )
@@ -270,9 +413,9 @@ def filtrar_achados_novos(resultados: list[dict], conn: sqlite3.Connection) -> l
                        WHERE fingerprint = ?""",
                     (fingerprint_existente,),
                 )
-                para_mostrar.append(achado)  # regressão: voltou a aparecer
+                para_mostrar.append(achado_saida)  # regressão: voltou a aparecer
             else:
-                para_mostrar.append(achado)
+                para_mostrar.append(achado_saida)
 
     conn.commit()
     return para_mostrar
@@ -290,6 +433,38 @@ def marcar_status(fingerprint: str, novo_status: str, conn: sqlite3.Connection) 
     return cur.rowcount > 0
 
 
+def atualizar_sugestao_ia(
+    fingerprint: str,
+    sugestao: str,
+    confianca: int,
+    justificativa: str,
+    conn: sqlite3.Connection,
+) -> bool:
+    """Persist a consultative AI suggestion without changing finding triage."""
+    sugestoes_validas = {
+        "provavel_falso_positivo",
+        "provavel_real",
+        "indeterminado",
+    }
+    if sugestao not in sugestoes_validas:
+        raise ValueError(f"sugestao precisa ser uma de: {sorted(sugestoes_validas)}")
+    if isinstance(confianca, bool) or not isinstance(confianca, int) or not 0 <= confianca <= 10:
+        raise ValueError("confianca precisa ser um inteiro entre 0 e 10")
+    if not isinstance(justificativa, str):
+        raise ValueError("justificativa precisa ser texto")
+    justificativa = mascarar_segredos(justificativa)
+    gerada_em = datetime.now(timezone.utc).isoformat()
+    cur = conn.execute(
+        """UPDATE findings
+           SET sugestao_ia = ?, confianca_ia = ?, justificativa_ia = ?,
+               sugestao_ia_gerada_em = ?
+           WHERE fingerprint = ?""",
+        (sugestao, confianca, justificativa, gerada_em, fingerprint),
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
 def listar_achados(
     conn: sqlite3.Connection,
     status: str | None = None,
@@ -302,7 +477,9 @@ def listar_achados(
 
     query = """
         SELECT fingerprint, regra, arquivo, linha, trecho, status, primeira_vez,
-             ultima_vez, ferramenta, severidade, origem, mensagem, repositorio
+               ultima_vez, ferramenta, severidade, origem, mensagem, repositorio,
+               possivel_segredo, fingerprint_legado, sugestao_ia, confianca_ia,
+               justificativa_ia, sugestao_ia_gerada_em
         FROM findings
     """
     filtros = []
@@ -336,7 +513,9 @@ def obter_achado(fingerprint: str, conn: sqlite3.Connection) -> dict | None:
     cursor = conn.execute(
         """
         SELECT fingerprint, regra, arquivo, linha, trecho, status, primeira_vez,
-             ultima_vez, ferramenta, severidade, origem, mensagem, repositorio
+               ultima_vez, ferramenta, severidade, origem, mensagem, repositorio,
+               possivel_segredo, sugestao_ia, confianca_ia, justificativa_ia,
+               sugestao_ia_gerada_em
         FROM findings
         WHERE fingerprint = ?
         """,
@@ -359,7 +538,9 @@ def listar_conflitos_fingerprint(conn: sqlite3.Connection) -> list[dict]:
     for atual in achados:
         if not _usa_fingerprint_com_ferramenta(atual):
             continue
-        fingerprint_legado = _calcular_fingerprint_legado(atual)
+        fingerprint_legado = atual.get("fingerprint_legado")
+        if not fingerprint_legado:
+            continue
         fingerprint_atual = atual["fingerprint"]
         if fingerprint_legado == fingerprint_atual:
             continue

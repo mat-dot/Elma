@@ -154,6 +154,7 @@ async def receber_findings(
                 "regra": achado.get("check_id"),
                 "severidade": achado.get("severity"),
                 "mensagem": achado.get("extra", {}).get("message"),
+                "possivel_segredo": bool(achado.get("possivel_segredo")),
             }
             for achado in bloqueadores
         ],

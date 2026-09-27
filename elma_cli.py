@@ -14,13 +14,16 @@ from fpdf import FPDF
 
 from elma_db import (
     conectar,
+    atualizar_sugestao_ia,
     filtrar_achados_novos,
     listar_conflitos_fingerprint,
     listar_achados,
     marcar_status,
     obter_achado,
 )
+from elma_guardrails import sanitizar_para_ia
 from elma_import import carregar_sarif, importar_sarif_para_banco
+from elma_priorizacao import formatar_achado, gerar_sugestoes_estruturadas
 from elma_severity import SEVERITY_RANK, avaliar_bloqueio
 
 load_dotenv()
@@ -48,6 +51,10 @@ def criar_parser() -> argparse.ArgumentParser:
 
     importar = comandos.add_parser("import-sarif", help="importa um relatório SARIF 2.1.0")
     importar.add_argument("arquivo", help="caminho do arquivo SARIF")
+    importar.add_argument(
+        "--repo",
+        help="identificador do repositório (ex.: org/repo) para escopar o fingerprint",
+    )
     _add_db_argument(importar)
 
     findings = comandos.add_parser("findings", help="consulta ou atualiza findings")
@@ -67,6 +74,14 @@ def criar_parser() -> argparse.ArgumentParser:
     status.add_argument("valor", choices=STATUS_CHOICES)
     _add_db_argument(status)
 
+    suggest_ia = operacoes.add_parser(
+        "suggest-ia", help="gera sugestões consultivas de priorização com IA"
+    )
+    suggest_ia.add_argument("--severity", help="filtra pela severidade normalizada")
+    suggest_ia.add_argument("--force", action="store_true", help="reprocessa achados já sugeridos")
+    suggest_ia.add_argument("--limit", type=int, help="máximo de achados a processar")
+    _add_db_argument(suggest_ia)
+
     report = comandos.add_parser("report", help="gera relatório da postura armazenada")
     report.add_argument("--format", choices=("terminal", "pdf"), default="terminal")
     report.add_argument("--output", help="arquivo de saída quando --format pdf")
@@ -80,6 +95,10 @@ def criar_parser() -> argparse.ArgumentParser:
     ci = comandos.add_parser("ci", help="avalia findings SARIF com limite determinístico")
     ci.add_argument("arquivo", help="caminho do arquivo SARIF")
     ci.add_argument("--fail-on", choices=SEVERITY_CHOICES[:-1], default="HIGH")
+    ci.add_argument(
+        "--repo",
+        help="identificador do repositório (ex.: org/repo) para escopar o fingerprint",
+    )
     _add_db_argument(ci)
     return parser
 
@@ -90,14 +109,18 @@ def severidade_ci(valor: str | None) -> int:
 
 
 def _formatar_achado(achado: dict) -> str:
-    local = achado.get("arquivo") or "(arquivo desconhecido)"
-    if achado.get("linha"):
-        local += f":{achado['linha']}"
-    return (
-        f"[{achado.get('severidade') or 'UNKNOWN'}] "
-        f"{achado.get('status') or 'novo'} {achado.get('fingerprint', '')} "
-        f"{local} | {achado.get('regra') or achado.get('mensagem') or 'sem regra'}"
-    )
+    linha_achado = formatar_achado(achado)
+    sugestao = achado.get("sugestao_ia")
+    if not sugestao:
+        return linha_achado
+    linha_sugestao = f"  IA: {sugestao}"
+    confianca = achado.get("confianca_ia")
+    if confianca is not None:
+        linha_sugestao += f" (confiança {confianca}/10)"
+    justificativa = achado.get("justificativa_ia")
+    if justificativa:
+        linha_sugestao += f" — {justificativa}"
+    return f"{linha_achado}\n{linha_sugestao}"
 
 
 def _formatar_conflito(conflito: dict) -> str:
@@ -155,8 +178,10 @@ def _gerar_advice(achados: list[dict]) -> str:
 
     modelo = os.getenv("ELMA_CLOUD_MODEL", "gemini-2.5-flash")
     contexto = "\n".join(
-        f"{_formatar_achado(achado)}\nMessage: {achado.get('mensagem') or ''}\n"
-        f"Evidence: {achado.get('trecho') or ''}"
+        sanitizar_para_ia(
+            f"{_formatar_achado(achado)}\nMessage: {achado.get('mensagem') or ''}\n"
+            f"Evidence: {achado.get('trecho') or ''}"
+        )
         for achado in achados[:20]
     )
     pergunta = (
@@ -180,7 +205,8 @@ def _gerar_pdf(conteudo: str, caminho: str) -> str:
         pedacos = textwrap.wrap(linha, width=100, break_long_words=True) or [""]
         for pedaco in pedacos:
             texto = pedaco.encode("latin-1", "replace").decode("latin-1")
-            pdf.multi_cell(0, 5, texto or " ", new_x="LMARGIN", new_y="NEXT")
+            pdf.multi_cell(0, 5, texto or " ")
+            pdf.set_x(pdf.l_margin)
     selo = hashlib.sha256(conteudo.encode("utf-8")).hexdigest()
     pdf.ln(5)
     pdf.set_font("helvetica", "B", 8)
@@ -191,7 +217,7 @@ def _gerar_pdf(conteudo: str, caminho: str) -> str:
 
 def executar(args: argparse.Namespace) -> int:
     if args.comando == "import-sarif":
-        total, ativos = importar_sarif_para_banco(args.arquivo, args.db)
+        total, ativos = importar_sarif_para_banco(args.arquivo, args.db, args.repo)
         print(f"SARIF: {total} achado(s) lido(s); {ativos} achado(s) ativo(s) ou reaberto(s).")
         return 0
 
@@ -209,6 +235,41 @@ def executar(args: argparse.Namespace) -> int:
                     print("\nCONFLITOS DE FINGERPRINT (revisão manual necessária):")
                     for conflito in conflitos:
                         print(_formatar_conflito(conflito))
+                return 0
+            if args.operacao == "suggest-ia":
+                if args.limit is not None and args.limit < 1:
+                    raise ValueError("--limit precisa ser maior que zero")
+                achados = listar_achados(conn, severidade=args.severity)
+                if not args.force:
+                    achados = [
+                        achado
+                        for achado in achados
+                        if not achado.get("sugestao_ia_gerada_em")
+                        or (
+                            achado.get("ultima_vez")
+                            and achado["ultima_vez"]
+                            > achado["sugestao_ia_gerada_em"]
+                        )
+                    ]
+                if args.limit is not None:
+                    achados = achados[: args.limit]
+                if not achados:
+                    print("Nenhum finding precisa de nova sugestão de IA.")
+                    return 0
+                if not os.getenv("GOOGLE_API_KEY"):
+                    raise ValueError("configure ELMA_GOOGLE_API_KEY para usar suggest-ia")
+                sugestoes = gerar_sugestoes_estruturadas(achados)
+                atualizadas = sum(
+                    atualizar_sugestao_ia(
+                        sugestao["fingerprint"],
+                        sugestao["sugestao"],
+                        sugestao["confianca"],
+                        sugestao["justificativa"],
+                        conn,
+                    )
+                    for sugestao in sugestoes
+                )
+                print(f"Sugestões de IA atualizadas: {atualizadas} finding(s).")
                 return 0
             if args.operacao == "show":
                 achado = obter_achado(args.fingerprint, conn)
@@ -248,6 +309,8 @@ def executar(args: argparse.Namespace) -> int:
 
     if args.comando == "ci":
         resultados = carregar_sarif(args.arquivo)
+        for achado in resultados:
+            achado["repositorio"] = args.repo
         conn = conectar(args.db)
         try:
             ativos = filtrar_achados_novos(resultados, conn)
