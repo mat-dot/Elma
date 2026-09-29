@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from fpdf import FPDF
 
 from elma_db import (
+    TIPOS_SCAN,
     conectar,
     atualizar_sugestao_ia,
     filtrar_achados_novos,
@@ -20,11 +21,21 @@ from elma_db import (
     listar_achados,
     marcar_status,
     obter_achado,
+    registrar_ativo_se_ausente,
+    registrar_importacao,
+    resumir_status_regra,
 )
 from elma_guardrails import sanitizar_para_ia
-from elma_import import carregar_sarif, importar_sarif_para_banco
+from elma_import import (
+    carregar_sarif,
+    carregar_sarif_com_escopo,
+    fechar_ausentes_para_ferramentas,
+    importar_sarif_para_banco,
+    importar_sarif_para_banco_com_fechamento,
+)
 from elma_priorizacao import formatar_achado, gerar_sugestoes_estruturadas
 from elma_severity import SEVERITY_RANK, avaliar_bloqueio
+from elma_tickets import criar_issue_confirmado
 
 load_dotenv()
 if os.getenv("ELMA_GOOGLE_API_KEY"):
@@ -51,6 +62,17 @@ def criar_parser() -> argparse.ArgumentParser:
 
     importar = comandos.add_parser("import-sarif", help="importa um relatório SARIF 2.1.0")
     importar.add_argument("arquivo", help="caminho do arquivo SARIF")
+    importar.add_argument("--tipo", choices=TIPOS_SCAN, help="tipo do scan SARIF")
+    importar.add_argument(
+        "--close-missing",
+        action="store_true",
+        help="fecha findings ausentes em ferramentas concluídas sem erro",
+    )
+    importar.add_argument(
+        "--force-close",
+        action="store_true",
+        help="libera a trava de fechamento em massa (requer --close-missing)",
+    )
     importar.add_argument(
         "--repo",
         help="identificador do repositório (ex.: org/repo) para escopar o fingerprint",
@@ -63,6 +85,7 @@ def criar_parser() -> argparse.ArgumentParser:
     listar = operacoes.add_parser("list", help="lista findings armazenados")
     listar.add_argument("--status", choices=STATUS_CHOICES)
     listar.add_argument("--severity", help="filtra pela severidade normalizada")
+    listar.add_argument("--tipo", choices=TIPOS_SCAN, help="filtra pelo tipo de scan")
     _add_db_argument(listar)
 
     mostrar = operacoes.add_parser("show", help="mostra um finding pelo fingerprint")
@@ -95,6 +118,17 @@ def criar_parser() -> argparse.ArgumentParser:
     ci = comandos.add_parser("ci", help="avalia findings SARIF com limite determinístico")
     ci.add_argument("arquivo", help="caminho do arquivo SARIF")
     ci.add_argument("--fail-on", choices=SEVERITY_CHOICES[:-1], default="HIGH")
+    ci.add_argument("--tipo", choices=TIPOS_SCAN, help="tipo do scan SARIF")
+    ci.add_argument(
+        "--close-missing",
+        action="store_true",
+        help="fecha findings ausentes em ferramentas concluídas sem erro",
+    )
+    ci.add_argument(
+        "--force-close",
+        action="store_true",
+        help="libera a trava de fechamento em massa (requer --close-missing)",
+    )
     ci.add_argument(
         "--repo",
         help="identificador do repositório (ex.: org/repo) para escopar o fingerprint",
@@ -110,6 +144,9 @@ def severidade_ci(valor: str | None) -> int:
 
 def _formatar_achado(achado: dict) -> str:
     linha_achado = formatar_achado(achado)
+    tipo_scan = achado.get("tipo_scan")
+    if tipo_scan:
+        linha_achado = f"[{tipo_scan}] {linha_achado}"
     sugestao = achado.get("sugestao_ia")
     if not sugestao:
         return linha_achado
@@ -154,15 +191,21 @@ def _renderizar_relatorio(
     ]
     if not achados:
         linhas.append("No findings are stored in the selected database.")
-    for achado in achados:
-        linhas.extend(
-            [
-                _formatar_achado(achado),
-                f"Message: {achado.get('mensagem') or ''}",
-                f"Evidence: {achado.get('trecho') or ''}",
-                "",
-            ]
-        )
+    for tipo_scan in (*TIPOS_SCAN, None):
+        grupo = [achado for achado in achados if achado.get("tipo_scan") == tipo_scan]
+        if not grupo:
+            continue
+        nome_tipo = tipo_scan or "não informado"
+        linhas.extend([f"SCAN TYPE: {nome_tipo} ({len(grupo)})", ""])
+        for achado in grupo:
+            linhas.extend(
+                [
+                    _formatar_achado(achado),
+                    f"Message: {achado.get('mensagem') or ''}",
+                    f"Evidence: {achado.get('trecho') or ''}",
+                    "",
+                ]
+            )
     if conflitos:
         linhas.extend(["FINGERPRINT CONFLICTS (not merged automatically):"])
         linhas.extend(_formatar_conflito(conflito) for conflito in conflitos)
@@ -217,15 +260,45 @@ def _gerar_pdf(conteudo: str, caminho: str) -> str:
 
 def executar(args: argparse.Namespace) -> int:
     if args.comando == "import-sarif":
-        total, ativos = importar_sarif_para_banco(args.arquivo, args.db, args.repo)
+        if args.force_close and not args.close_missing:
+            raise ValueError("--force-close requer --close-missing")
+        avisos = []
+        fechados = 0
+        ignorados = {"runs": 0, "resultados": 0}
+        if args.close_missing:
+            total, ativos, fechados, avisos = importar_sarif_para_banco_com_fechamento(
+                args.arquivo,
+                args.db,
+                args.repo,
+                args.tipo,
+                args.force_close,
+                ignorados,
+            )
+        else:
+            total, ativos = importar_sarif_para_banco(
+                args.arquivo, args.db, args.repo, args.tipo, ignorados
+            )
         print(f"SARIF: {total} achado(s) lido(s); {ativos} achado(s) ativo(s) ou reaberto(s).")
+        if args.close_missing:
+            print(f"Findings fechados automaticamente: {fechados}.")
+            for aviso in avisos:
+                print(f"Aviso: {aviso}", file=sys.stderr)
+        ignorados_total = ignorados["runs"] + ignorados["resultados"]
+        if ignorados_total > 0:
+            print(
+                f"SARIF malformado: {ignorados_total} item(ns) descartado(s) "
+                f"({ignorados['runs']} run(s), {ignorados['resultados']} resultado(s))."
+            )
+            return 2
         return 0
 
     if args.comando == "findings":
         conn = conectar(args.db)
         try:
             if args.operacao == "list":
-                achados = listar_achados(conn, args.status, args.severity)
+                achados = listar_achados(
+                    conn, args.status, args.severity, args.tipo
+                )
                 conflitos = listar_conflitos_fingerprint(conn)
                 if not achados:
                     print("Nenhum finding encontrado.")
@@ -256,6 +329,10 @@ def executar(args: argparse.Namespace) -> int:
                 if not achados:
                     print("Nenhum finding precisa de nova sugestão de IA.")
                     return 0
+                for achado in achados:
+                    achado["contexto_status_regra"] = resumir_status_regra(
+                        achado, conn
+                    )
                 if not os.getenv("GOOGLE_API_KEY"):
                     raise ValueError("configure ELMA_GOOGLE_API_KEY para usar suggest-ia")
                 sugestoes = gerar_sugestoes_estruturadas(achados)
@@ -283,6 +360,29 @@ def executar(args: argparse.Namespace) -> int:
                 print("Finding não encontrado.", file=sys.stderr)
                 return 2
             print(f"Status atualizado para {args.valor}.")
+            if args.valor == "confirmado":
+                ticket = criar_issue_confirmado(args.fingerprint, conn)
+                if ticket.get("criada"):
+                    print(f"Issue GitHub criada: {ticket['issue_url']}")
+                elif ticket.get("dry_run"):
+                    print(
+                        "Prévia da issue (dry-run):\n"
+                        f"Título: {ticket['titulo']}\n{ticket['corpo']}"
+                    )
+                elif ticket.get("reconciliada"):
+                    print(f"Issue GitHub vinculada: {ticket['issue_url']}")
+                elif ticket.get("erro"):
+                    print(
+                        f"Não foi possível criar a issue: {ticket['erro']}",
+                        file=sys.stderr,
+                    )
+                elif ticket.get("em_andamento"):
+                    print("Criação de issue já está em andamento.")
+                elif ticket.get("motivo") != "finding_nao_elegivel":
+                    print(
+                        f"Issue não criada: {ticket.get('motivo', 'ignorada')}.",
+                        file=sys.stderr,
+                    )
             return 0
         finally:
             conn.close()
@@ -308,15 +408,92 @@ def executar(args: argparse.Namespace) -> int:
         return 0
 
     if args.comando == "ci":
-        resultados = carregar_sarif(args.arquivo)
+        if args.force_close and not args.close_missing:
+            raise ValueError("--force-close requer --close-missing")
+        inicio_execucao = (
+            datetime.now(timezone.utc).isoformat() if args.close_missing else None
+        )
+        ignorados = {"runs": 0, "resultados": 0}
+        sucessos_explicitos = set()
+        ferramentas_sem_sucesso_explicito = set()
+        ferramentas_identificadas = set()
+        if args.close_missing:
+            resultados, ferramentas_ok = carregar_sarif_com_escopo(
+                args.arquivo,
+                args.tipo,
+                ignorados,
+                sucessos_explicitos,
+                ferramentas_sem_sucesso_explicito,
+                ferramentas_identificadas,
+            )
+        else:
+            resultados = carregar_sarif(
+                args.arquivo, args.tipo, ignorados, ferramentas_identificadas
+            )
+            ferramentas_ok = set()
+        if ignorados["runs"] > 0 or ignorados["resultados"] > 0:
+            ferramentas_ok = set()
         for achado in resultados:
             achado["repositorio"] = args.repo
         conn = conectar(args.db)
         try:
-            ativos = filtrar_achados_novos(resultados, conn)
+            registrar_ativo_se_ausente(args.repo, conn)
+            contagens = {"novos": 0, "reabertos": 0}
+            ativos = filtrar_achados_novos(
+                resultados, conn, agora=inicio_execucao, contagens=contagens
+            )
+            fechados = 0
+            avisos = []
+            if args.close_missing and ignorados["runs"] == 0 and ignorados["resultados"] == 0:
+                fechados, avisos = fechar_ausentes_para_ferramentas(
+                    conn,
+                    args.repo,
+                    ferramentas_ok,
+                    args.tipo,
+                    inicio_execucao,
+                    args.force_close,
+                    sucessos_explicitos,
+                    ferramentas_sem_sucesso_explicito,
+                )
+            elif args.close_missing:
+                avisos.append(
+                    "Fechamento automático ignorado: o SARIF contém runs/resultados descartados."
+                )
+            ferramentas = sorted(
+                {
+                    *ferramentas_ok,
+                    *(
+                        achado.get("tool_name") or achado.get("ferramenta")
+                        for achado in resultados
+                        if achado.get("tool_name") or achado.get("ferramenta")
+                    ),
+                    *ferramentas_identificadas,
+                }
+            )
+            registrar_importacao(
+                conn,
+                args.repo,
+                ", ".join(ferramentas) or None,
+                args.tipo,
+                len(resultados),
+                contagens["novos"],
+                contagens["reabertos"],
+                fechados,
+                descartados=ignorados["runs"] + ignorados["resultados"],
+            )
         finally:
             conn.close()
+        if args.close_missing:
+            print(f"Findings fechados automaticamente: {fechados}.")
+            for aviso in avisos:
+                print(f"Aviso: {aviso}", file=sys.stderr)
         bloqueadores, severidades_indefinidas = avaliar_bloqueio(ativos, args.fail_on)
+        ignorados_total = ignorados["runs"] + ignorados["resultados"]
+        if ignorados_total > 0:
+            print(
+                f"SARIF malformado: {ignorados_total} item(ns) descartado(s) "
+                f"({ignorados['runs']} run(s), {ignorados['resultados']} resultado(s))."
+            )
         if bloqueadores:
             print(f"CI reprovado: {len(bloqueadores)} finding(s) bloqueador(es).")
             if severidades_indefinidas:
@@ -334,6 +511,8 @@ def executar(args: argparse.Namespace) -> int:
                     f"{achado.get('start', {}).get('line') or '?'} "
                     f"{achado.get('check_id') or achado.get('extra', {}).get('message', '')}"
                 )
+        if bloqueadores or ignorados_total > 0:
+            print("CI reprovado por falha de severidade e/ou SARIF malformado.")
             return 1
         print(f"CI aprovado: nenhum finding em {args.fail_on} ou acima.")
         return 0

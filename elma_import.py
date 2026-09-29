@@ -3,9 +3,17 @@
 import json
 import logging
 import os
+from datetime import datetime, timezone
 from typing import Any
 
-from elma_db import conectar, filtrar_achados_novos
+from elma_db import (
+    TIPOS_SCAN,
+    conectar,
+    fechar_ausentes,
+    filtrar_achados_novos,
+    registrar_ativo_se_ausente,
+    registrar_importacao,
+)
 from elma_guardrails import mascarar_segredos
 from elma_severity import normalizar_severidade
 
@@ -15,6 +23,23 @@ TAGS_SEVERIDADE = {
     "ERROR", "WARNING", "NOTE", "NONE",
 }
 LOGGER = logging.getLogger(__name__)
+
+
+def ferramentas_no_sarif(documento: dict[str, Any]) -> set[str]:
+    """Return named tools from structurally valid SARIF runs."""
+    ferramentas = set()
+    runs = documento.get("runs")
+    if not isinstance(runs, list):
+        return ferramentas
+    for run in runs:
+        if not isinstance(run, dict):
+            continue
+        tool = run.get("tool")
+        driver = tool.get("driver") if isinstance(tool, dict) else None
+        nome = driver.get("name") if isinstance(driver, dict) else None
+        if isinstance(nome, str) and nome:
+            ferramentas.add(nome)
+    return ferramentas
 
 
 def _severity(properties: dict[str, Any]) -> str | None:
@@ -30,8 +55,19 @@ def _severity(properties: dict[str, Any]) -> str | None:
     return None
 
 
-def parse_sarif(documento: dict[str, Any]) -> list[dict[str, Any]]:
+def parse_sarif(
+    documento: dict[str, Any],
+    tipo_scan: str | None = None,
+    ignorados: dict[str, int] | None = None,
+) -> list[dict[str, Any]]:
     """Converte resultados SARIF 2.1.0 para o formato aceito pelo SQLite da Elma."""
+    if ignorados is None:
+        ignorados = {"runs": 0, "resultados": 0}
+    else:
+        ignorados["runs"] = ignorados.get("runs", 0)
+        ignorados["resultados"] = ignorados.get("resultados", 0)
+    if tipo_scan is not None and tipo_scan not in TIPOS_SCAN:
+        raise ValueError(f"tipo precisa ser um de: {TIPOS_SCAN}")
     if not isinstance(documento, dict):
         raise ValueError("o documento SARIF deve ser um objeto JSON")
     if documento.get("version") != "2.1.0":
@@ -43,6 +79,7 @@ def parse_sarif(documento: dict[str, Any]) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
     for run_index, run in enumerate(runs):
         if not isinstance(run, dict):
+            ignorados["runs"] = ignorados.get("runs", 0) + 1
             LOGGER.warning("Ignorando run SARIF %d: estrutura inválida", run_index)
             continue
         try:
@@ -65,6 +102,7 @@ def parse_sarif(documento: dict[str, Any]) -> list[dict[str, Any]]:
             if not isinstance(results, list):
                 raise ValueError("'results' deve ser uma lista")
         except (AttributeError, TypeError, ValueError) as error:
+            ignorados["runs"] = ignorados.get("runs", 0) + 1
             LOGGER.warning("Ignorando run SARIF %d: %s", run_index, error)
             continue
 
@@ -133,9 +171,11 @@ def parse_sarif(documento: dict[str, Any]) -> list[dict[str, Any]]:
                         "tool_name": tool_name,
                         "severity": normalizar_severidade(severity),
                         "source_format": "SARIF 2.1.0",
+                        "tipo_scan": tipo_scan,
                     }
                 )
             except (AttributeError, IndexError, TypeError, ValueError) as error:
+                ignorados["resultados"] = ignorados.get("resultados", 0) + 1
                 LOGGER.warning(
                     "Ignorando resultado SARIF %d do run %d: %s",
                     result_index,
@@ -145,8 +185,94 @@ def parse_sarif(documento: dict[str, Any]) -> list[dict[str, Any]]:
     return findings
 
 
-def carregar_sarif(caminho_arquivo: str) -> list[dict[str, Any]]:
-    """Lê um arquivo SARIF local, limitando tamanho antes de decodificar JSON."""
+def parse_sarif_com_escopo(
+    documento: dict[str, Any],
+    tipo_scan: str | None = None,
+    ignorados: dict[str, int] | None = None,
+    sucessos_explicitos: set[str] | None = None,
+    ferramentas_sem_sucesso_explicito: set[str] | None = None,
+    ferramentas_identificadas: set[str] | None = None,
+) -> tuple[list[dict[str, Any]], set[str]]:
+    """Parse findings and report tools whose every SARIF run completed cleanly."""
+    if ignorados is None:
+        ignorados = {"runs": 0, "resultados": 0}
+    else:
+        ignorados["runs"] = ignorados.get("runs", 0)
+        ignorados["resultados"] = ignorados.get("resultados", 0)
+    findings = parse_sarif(documento, tipo_scan, ignorados)
+    if ferramentas_identificadas is not None:
+        ferramentas_identificadas.update(ferramentas_no_sarif(documento))
+    runs_por_ferramenta: dict[str, list[tuple[bool, bool, bool]]] = {}
+
+    for run in documento.get("runs", []):
+        if not isinstance(run, dict):
+            continue
+        tool_data = run.get("tool")
+        tool_info = tool_data.get("driver") if isinstance(tool_data, dict) else None
+        ferramenta = tool_info.get("name") if isinstance(tool_info, dict) else None
+        if not isinstance(ferramenta, str) or not ferramenta:
+            continue
+
+        run_ok = True
+        sucesso_explicito = False
+        invocations = run.get("invocations", [])
+        if not isinstance(invocations, list):
+            run_ok = False
+            invocations = []
+        for invocation in invocations:
+            if not isinstance(invocation, dict):
+                run_ok = False
+                continue
+            if invocation.get("executionSuccessful") is True:
+                sucesso_explicito = True
+            if invocation.get("executionSuccessful") is False:
+                run_ok = False
+            for notification_key in (
+                "toolExecutionNotifications",
+                "configurationNotifications",
+            ):
+                notifications = invocation.get(notification_key, [])
+                if not isinstance(notifications, list):
+                    run_ok = False
+                    continue
+                if any(
+                    isinstance(notification, dict)
+                    and str(notification.get("level", "")).lower() == "error"
+                    for notification in notifications
+                ):
+                    run_ok = False
+        resultados_run = run.get("results", [])
+        tem_resultados = isinstance(resultados_run, list) and bool(resultados_run)
+        runs_por_ferramenta.setdefault(ferramenta, []).append(
+            (run_ok, sucesso_explicito, tem_resultados)
+        )
+
+    ferramentas_ok = set()
+    confirmadas = set()
+    sem_confirmacao = set()
+    for ferramenta, estados in runs_por_ferramenta.items():
+        execucoes_ok = all(estado[0] for estado in estados)
+        tem_resultados = any(estado[2] for estado in estados)
+        sucesso_explicito = any(estado[1] for estado in estados)
+        if execucoes_ok and sucesso_explicito:
+            confirmadas.add(ferramenta)
+        if execucoes_ok and (tem_resultados or sucesso_explicito):
+            ferramentas_ok.add(ferramenta)
+        elif execucoes_ok and not tem_resultados:
+            sem_confirmacao.add(ferramenta)
+    if ignorados["runs"] > 0 or ignorados["resultados"] > 0:
+        ferramentas_ok = set()
+        confirmadas = set()
+        sem_confirmacao = set()
+    if sucessos_explicitos is not None:
+        sucessos_explicitos.update(confirmadas)
+    if ferramentas_sem_sucesso_explicito is not None:
+        ferramentas_sem_sucesso_explicito.update(sem_confirmacao)
+    return findings, ferramentas_ok
+
+
+def _ler_documento_sarif(caminho_arquivo: str) -> dict[str, Any]:
+    """Read a bounded SARIF file and decode its JSON document."""
     tamanho = os.path.getsize(caminho_arquivo)
     if tamanho > TAMANHO_MAXIMO_SARIF:
         raise ValueError(
@@ -157,24 +283,237 @@ def carregar_sarif(caminho_arquivo: str) -> list[dict[str, Any]]:
             documento = json.load(arquivo)
         except json.JSONDecodeError as e:
             raise ValueError(f"JSON inválido: {e.msg}") from e
-    return parse_sarif(documento)
+    return documento
+
+
+def carregar_sarif(
+    caminho_arquivo: str,
+    tipo_scan: str | None = None,
+    ignorados: dict[str, int] | None = None,
+    ferramentas_identificadas: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Lê um arquivo SARIF local, limitando tamanho antes de decodificar JSON."""
+    documento = _ler_documento_sarif(caminho_arquivo)
+    if ferramentas_identificadas is not None:
+        ferramentas_identificadas.update(ferramentas_no_sarif(documento))
+    return parse_sarif(documento, tipo_scan, ignorados)
+
+
+def carregar_sarif_com_escopo(
+    caminho_arquivo: str,
+    tipo_scan: str | None = None,
+    ignorados: dict[str, int] | None = None,
+    sucessos_explicitos: set[str] | None = None,
+    ferramentas_sem_sucesso_explicito: set[str] | None = None,
+    ferramentas_identificadas: set[str] | None = None,
+) -> tuple[list[dict[str, Any]], set[str]]:
+    """Load findings together with the tools eligible for absent-finding closure."""
+    documento = _ler_documento_sarif(caminho_arquivo)
+    return parse_sarif_com_escopo(
+        documento,
+        tipo_scan,
+        ignorados,
+        sucessos_explicitos,
+        ferramentas_sem_sucesso_explicito,
+        ferramentas_identificadas,
+    )
+
+
+def fechar_ausentes_para_ferramentas(
+    conn,
+    repositorio: str | None,
+    ferramentas_ok: set[str],
+    tipo_scan: str | None,
+    inicio_execucao: str,
+    force: bool = False,
+    sucessos_explicitos: set[str] | None = None,
+    ferramentas_sem_sucesso_explicito: set[str] | None = None,
+) -> tuple[int, list[str]]:
+    """Close per-tool scopes and collect operator-visible warnings."""
+    if not repositorio or not tipo_scan:
+        _, aviso = fechar_ausentes(
+            conn, repositorio, None, tipo_scan, inicio_execucao, force
+        )
+        return 0, [aviso] if aviso else []
+    avisos = []
+    for ferramenta in sorted(ferramentas_sem_sucesso_explicito or set()):
+        abertos = conn.execute(
+            """SELECT COUNT(*) FROM findings
+               WHERE repositorio = ? AND ferramenta = ? AND tipo_scan = ?
+                 AND status IN ('novo', 'confirmado')""",
+            (repositorio, ferramenta, tipo_scan),
+        ).fetchone()[0]
+        if abertos and not force:
+            avisos.append(
+                "Fechamento automático bloqueado: o SARIF de resultado vazio para "
+                f"{ferramenta} não contém executionSuccessful: true; "
+                f"{abertos} finding(s) permanecem abertos."
+            )
+    ferramentas_para_fechar = set(ferramentas_ok)
+    if force:
+        ferramentas_para_fechar.update(ferramentas_sem_sucesso_explicito or set())
+    if not ferramentas_para_fechar:
+        if not avisos:
+            avisos.append(
+                "Fechamento automático ignorado: nenhuma ferramenta concluiu "
+                "o scan sem erros."
+            )
+        return 0, avisos
+
+    fechados = 0
+    for ferramenta in sorted(ferramentas_para_fechar):
+        quantidade, aviso = fechar_ausentes(
+            conn,
+            repositorio,
+            ferramenta,
+            tipo_scan,
+            inicio_execucao,
+            force,
+            ferramenta in (sucessos_explicitos or set()),
+        )
+        fechados += quantidade
+        if aviso:
+            avisos.append(aviso)
+    return fechados, avisos
+
+
+def marcar_sarif_sucesso_explicito(caminho_arquivo: str) -> None:
+    """Add a success invocation to each Trivy run after its action succeeds."""
+    documento = _ler_documento_sarif(caminho_arquivo)
+    runs = documento.get("runs")
+    if not isinstance(runs, list):
+        raise ValueError("documento SARIF sem a lista 'runs'")
+    for run in runs:
+        if not isinstance(run, dict):
+            continue
+        tool_data = run.get("tool")
+        tool_info = tool_data.get("driver") if isinstance(tool_data, dict) else None
+        if not isinstance(tool_info, dict) or tool_info.get("name") != "Trivy":
+            continue
+        invocations = run.get("invocations")
+        if invocations is None:
+            invocations = []
+        if not isinstance(invocations, list):
+            raise ValueError("'invocations' deve ser uma lista")
+        invocations.append({"executionSuccessful": True})
+        run["invocations"] = invocations
+    with open(caminho_arquivo, "w", encoding="utf-8") as arquivo:
+        json.dump(documento, arquivo, ensure_ascii=False)
+        arquivo.write("\n")
 
 
 def importar_sarif_para_banco(
     caminho_arquivo: str,
     caminho_banco: str = "elma_findings.db",
     repositorio: str | None = None,
+    tipo_scan: str | None = None,
+    ignorados: dict[str, int] | None = None,
 ) -> tuple[int, int]:
     """Importa um relatório e retorna total lido e findings apresentados."""
-    resultados = carregar_sarif(caminho_arquivo)
-    if not resultados:
-        return 0, 0
+    if ignorados is None:
+        ignorados = {"runs": 0, "resultados": 0}
+    else:
+        ignorados["runs"] = ignorados.get("runs", 0)
+        ignorados["resultados"] = ignorados.get("resultados", 0)
+    documento = _ler_documento_sarif(caminho_arquivo)
+    resultados = parse_sarif(documento, tipo_scan, ignorados)
     if repositorio:
         for achado in resultados:
             achado["repositorio"] = repositorio
     conn = conectar(caminho_banco)
     try:
-        apresentados = filtrar_achados_novos(resultados, conn)
+        registrar_ativo_se_ausente(repositorio, conn)
+        contagens = {"novos": 0, "reabertos": 0}
+        apresentados = filtrar_achados_novos(resultados, conn, contagens=contagens)
+        ferramentas = sorted(ferramentas_no_sarif(documento))
+        registrar_importacao(
+            conn,
+            repositorio,
+            ", ".join(ferramentas) or None,
+            tipo_scan,
+            len(resultados),
+            contagens["novos"],
+            contagens["reabertos"],
+            0,
+            descartados=ignorados["runs"] + ignorados["resultados"],
+        )
         return len(resultados), len(apresentados)
+    finally:
+        conn.close()
+
+
+def importar_sarif_para_banco_com_fechamento(
+    caminho_arquivo: str,
+    caminho_banco: str,
+    repositorio: str | None,
+    tipo_scan: str | None,
+    force_close: bool = False,
+    ignorados: dict[str, int] | None = None,
+) -> tuple[int, int, int, list[str]]:
+    """Import SARIF and optionally close missing findings in successful scopes."""
+    inicio_execucao = datetime.now(timezone.utc).isoformat()
+    if ignorados is None:
+        ignorados = {"runs": 0, "resultados": 0}
+    else:
+        ignorados["runs"] = ignorados.get("runs", 0)
+        ignorados["resultados"] = ignorados.get("resultados", 0)
+    sucessos_explicitos = set()
+    ferramentas_sem_sucesso_explicito = set()
+    documento = _ler_documento_sarif(caminho_arquivo)
+    ferramentas_identificadas = ferramentas_no_sarif(documento)
+    resultados, ferramentas_ok = parse_sarif_com_escopo(
+        documento,
+        tipo_scan,
+        ignorados,
+        sucessos_explicitos,
+        ferramentas_sem_sucesso_explicito,
+        ferramentas_identificadas,
+    )
+    if ignorados["runs"] > 0 or ignorados["resultados"] > 0:
+        ferramentas_ok = set()
+    for achado in resultados:
+        achado["repositorio"] = repositorio
+
+    conn = conectar(caminho_banco)
+    try:
+        registrar_ativo_se_ausente(repositorio, conn)
+        contagens = {"novos": 0, "reabertos": 0}
+        apresentados = filtrar_achados_novos(
+            resultados, conn, agora=inicio_execucao, contagens=contagens
+        )
+        fechados, avisos = fechar_ausentes_para_ferramentas(
+            conn,
+            repositorio,
+            ferramentas_ok,
+            tipo_scan,
+            inicio_execucao,
+            force_close,
+            sucessos_explicitos,
+            ferramentas_sem_sucesso_explicito,
+        )
+        ferramentas = sorted(
+            {
+                *ferramentas_ok,
+                *ferramentas_sem_sucesso_explicito,
+                *ferramentas_identificadas,
+                *(
+                    achado.get("tool_name") or achado.get("ferramenta")
+                    for achado in resultados
+                    if achado.get("tool_name") or achado.get("ferramenta")
+                ),
+            }
+        )
+        registrar_importacao(
+            conn,
+            repositorio,
+            ", ".join(ferramentas) or None,
+            tipo_scan,
+            len(resultados),
+            contagens["novos"],
+            contagens["reabertos"],
+            fechados,
+            descartados=ignorados["runs"] + ignorados["resultados"],
+        )
+        return len(resultados), len(apresentados), fechados, avisos
     finally:
         conn.close()
