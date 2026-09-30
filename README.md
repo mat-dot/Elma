@@ -1,194 +1,229 @@
 # Elma ASPM
 
-Elma ingere relatórios SARIF 2.1.0 em um repositório local de findings em
-SQLite. Oferece triagem determinística de achados, relatórios de postura e
-códigos de saída para CI. O Semgrep ou o Trivy rodam separadamente e
-fornecem o SARIF de entrada.
+**Application Security Posture Management leve, local e determinístico.**
+A Elma recebe relatórios SARIF (Semgrep, Trivy e qualquer scanner compatível), deduplica os findings, guarda o histórico em SQLite e devolve um veredito de CI. Triagem, SLA, métricas, tickets e IA consultiva ficam por cima, sem nunca mudar a decisão do gate.
+
+> Projeto do desafio ASPM + IA (FIAP Pride 2026).
+
+---
+
+## Por que a Elma
+
+Scanners geram ruído: o mesmo achado aparece a cada push, falsos positivos voltam, e ninguém sabe o que está atrasado. A Elma resolve isso com uma camada de memória:
+
+- **Fingerprint estável**: o achado é reconhecido mesmo que a linha mude.
+- **Triagem persistente**: o que foi marcado como `falso_positivo` não reaparece; o que foi `corrigido` e voltou é reaberto como regressão.
+- **Gate determinístico**: o CI passa ou falha por regra de severidade, sem depender de LLM ou de rede.
+- **IA só como conselheira**: sugestões e remediações são gravadas à parte e nunca alteram status nem o resultado do CI.
+
+## Funcionalidades
+
+| Área | O que faz |
+|---|---|
+| Ingestão | SARIF 2.1.0 via CLI ou `POST /findings`; limite de 25 MB; runs/resultados malformados são contados e reprovam o gate |
+| Deduplicação | Fingerprint = repositório + ferramenta + regra + arquivo + evidência mascarada |
+| Severidade | Normalizada para `CRITICAL/HIGH/MEDIUM/LOW/INFO/UNKNOWN`; desconhecida **sempre bloqueia** (fail-closed) |
+| Fechamento automático | Fecha findings ausentes só após scan concluído sem erro, com trava contra fechamento em massa |
+| Priorização | Score por severidade × exposição × criticidade do ativo × parecer de IA |
+| SLA | Prazo por severidade (derivado, sem migração), com atrasados no relatório, API e painel |
+| Métricas | Aging, MTTR e tendência por dia |
+| Ativos | Cadastro por repositório com tipo, exposição, criticidade e lacunas de tipos de scan |
+| Tickets | Issue no GitHub ao confirmar um finding `CRITICAL` (dry-run por padrão) |
+| IA consultiva | `suggest-ia` (falso positivo vs. real) e `remediar-ia`, com Gemini ou Ollama local |
+| Guardrails | Mascaramento de segredos/CPF/CNPJ e filtro de prompt injection |
+| Painel | Dashboard web em `/painel` |
+| Relatórios | Terminal ou PDF com selo SHA-256 |
+
+## Arquitetura
+
+```mermaid
+flowchart LR
+    A[Semgrep / Trivy] -->|SARIF| B[GitHub Actions]
+    B -->|POST /findings| C[API FastAPI]
+    D[CLI elma] --> E
+    C --> E[Importer + Guardrails]
+    E --> F[(SQLite<br/>findings, ativos, importacoes)]
+    F --> G[Gate de CI<br/>pass / fail]
+    F --> H[Painel /painel]
+    F --> I[SLA, score, métricas]
+    F -.consultivo.-> J[IA: Gemini / Ollama]
+    F -.opcional.-> K[GitHub Issues]
+```
+
+## Início rápido
+
+```bash
+git clone <seu-repo>
+cd <seu-repo>
+python -m pip install -r requirements.txt
+cp .env.example .env   # ajuste as variáveis
+```
+
+Importar um SARIF e ver os findings:
+
+```bash
+python elma_cap8.py import-sarif semgrep.sarif --tipo sast --repo org/repo
+python elma_cap8.py findings list --status novo
+```
+
+Subir a API e o painel:
+
+```bash
+export ELMA_API_KEY="uma-chave-forte"
+uvicorn elma.api:app --host 0.0.0.0 --port 8000
+# painel: http://localhost:8000/painel
+```
+
+## CLI
+
+```bash
+python elma_cap8.py <comando> [opções]
+```
+
+| Comando | Descrição |
+|---|---|
+| `import-sarif ARQ [--tipo T] [--repo R] [--close-missing] [--force-close]` | Importa um SARIF; sai com código 2 se houver itens descartados |
+| `ci ARQ [--fail-on HIGH] [--tipo T] [--repo R] [--close-missing]` | Avalia o SARIF; código 1 reprova |
+| `findings list [--status S] [--severity V] [--tipo T]` | Lista findings, marcando SLA atrasado |
+| `findings show FINGERPRINT` | Detalhe de um finding, incluindo SLA e IA |
+| `findings status FINGERPRINT VALOR` | `novo`, `confirmado`, `falso_positivo` ou `corrigido` |
+| `findings suggest-ia [--severity V] [--limit N] [--force]` | Parecer consultivo de IA |
+| `findings remediar-ia [--severity V] [--limit N] [--force]` | Orientação de remediação por IA |
+| `report [--format terminal\|pdf] [--output ARQ] [--advice]` | Relatório de postura |
+| `metrics` | Aging, MTTR, SLA e tendência |
+
+Tipos de scan aceitos: `sast`, `sca`, `secrets`, `iac`, `container`, `k8s`, `dast`. O tipo é metadado e **não** altera o fingerprint.
+
+Use `--db CAMINHO` em qualquer comando para apontar outro banco.
+
+## Como o gate de CI decide
+
+- Reprova (código 1) se existir finding ativo com severidade **igual ou acima** de `--fail-on` (padrão `HIGH`).
+- Findings `falso_positivo` são ignorados.
+- Severidade ausente ou desconhecida vira `UNKNOWN` e **sempre reprova**, para que metadado incompleto não passe em silêncio.
+- SARIF com runs ou resultados descartados também reprova.
+- O mapeamento SARIF é: `error→HIGH`, `warning→MEDIUM`, `note→LOW`, `none→INFO`. Scores numéricos de `security-severity` seguem as faixas CVSS (≥9 critical, ≥7 high, ≥4 medium, >0 low).
+
+A IA nunca participa dessa decisão.
+
+## API
+
+Todas as rotas (exceto `/health` e `/painel`) exigem `Authorization: Bearer <ELMA_API_KEY>`.
+
+| Método | Rota | Descrição |
+|---|---|---|
+| `POST` | `/findings` | Ingere SARIF e devolve `aprovado` + bloqueadores (sempre HTTP 200 se avaliou) |
+| `GET` | `/findings` | Fila ordenada por score, com filtros e paginação |
+| `GET` | `/findings/{fingerprint}` | Detalhe, ativo, score e SLA |
+| `POST` | `/findings/{fingerprint}/status` | Triagem (dispara ticket ao confirmar / fecha ao corrigir) |
+| `POST` | `/findings/{fingerprint}/analyze` · `/findings/analyze` | Parecer de IA (unitário / lote até 50) |
+| `POST` | `/findings/{fingerprint}/remediate` · `/findings/remediate` | Remediação por IA |
+| `GET` | `/postura` | Totais por severidade e status, novos em 7 dias, SLA |
+| `GET` | `/metricas` | Aging, MTTR, tendência, SLA |
+| `GET` | `/ativos` · `PATCH /ativos/{repositorio}` | Inventário e ajuste de exposição/criticidade |
+| `GET` | `/ai/config` | Provedor e modelo de IA ativos |
+| `GET` | `/painel` | Dashboard |
+| `GET` | `/health` | Liveness, sem autenticação |
+
+Exemplo de corpo do `POST /findings`:
+
+```json
+{
+  "sarif": { "version": "2.1.0", "runs": [] },
+  "fail_on": "HIGH",
+  "repositorio": "org/repo",
+  "tipo_scan": "sast",
+  "fechar_ausentes": false
+}
+```
+
+Códigos: `401` credencial, `409` conflito de fingerprint, `413` corpo grande demais, `422` payload inválido.
+
+`fechar_ausentes=true` exige `repositorio` e `tipo_scan`. Um scan sem findings só fecha ausentes se a ferramenta atestar `executionSuccessful: true`; o Trivy não emite esse atestado, então o workflow o acrescenta apenas quando o step do scanner termina com sucesso.
+
+## Integração com GitHub Actions
+
+O workflow [`scan.yml`](.github/workflows/scan.yml) roda Semgrep e Trivy (SCA, secrets e IaC), guarda os SARIFs como artefato e envia cada um para a API da Elma. Se qualquer envio falhar ou qualquer gate reprovar, o pipeline falha.
+
+Secrets necessários no repositório:
+
+- `ELMA_API_URL`
+- `ELMA_API_KEY`
 
 ## Configuração
 
-```powershell
-python -m pip install -r requirements.txt
+| Variável | Padrão | Descrição |
+|---|---|---|
+| `ELMA_DB_PATH` | `elma_findings.db` | Caminho do SQLite |
+| `ELMA_API_KEY` | (obrigatória na API) | Chave Bearer; sem ela a API recusa tudo |
+| `ELMA_LLM_PROVIDER` | `gemini` | `gemini` ou `ollama` |
+| `ELMA_GOOGLE_API_KEY` / `GOOGLE_API_KEY` | | Chave do Gemini |
+| `ELMA_CLOUD_MODEL` | `gemini-2.5-flash` | Modelo Gemini |
+| `ELMA_OLLAMA_MODEL` | `llama3.1` | Modelo Ollama |
+| `ELMA_OLLAMA_BASE_URL` | `http://localhost:11434` | Endpoint Ollama |
+| `ELMA_SLA_<SEVERIDADE>` | 15 / 30 / 90 / 120 | Prazo em dias (CRITICAL/HIGH/MEDIUM/LOW); INFO e UNKNOWN sem SLA |
+| `ELMA_TICKETS_ATIVO` | `false` | Liga a integração de issues |
+| `ELMA_TICKETS_DRY_RUN` | `true` | Só simula; desligue explicitamente para criar issues |
+| `ELMA_GITHUB_TOKEN` | | Token com escrita de issues nos repositórios alvo |
+| `ELMA_DASHBOARD_URL` / `ELMA_API_URL` | `http://localhost:8000` | Base do link do painel nas issues |
+
+> Nunca versione tokens. Use o `.env` (ignorado pelo Git) ou o gerenciador de secrets do ambiente.
+
+## Priorização por score
+
+```
+score = peso_severidade × fator_exposição × fator_criticidade × fator_ia
 ```
 
-O banco padrão é `elma_findings.db`. Defina `ELMA_DB_PATH` no `.env` ou no
-ambiente do processo para usar outro caminho. A triagem assistida por IA
-(`findings suggest-ia`) e os relatórios consultivos (`report --advice`) são
-opcionais; a importação, a triagem, os relatórios e o CI principais não
-exigem nenhum modelo ou credencial de nuvem.
+- **Peso**: CRITICAL 10, HIGH 7, MEDIUM 4, LOW 2, INFO 1, UNKNOWN 7.
+- **Exposição**: `internet` 1.5, `interna` 1.0.
+- **Criticidade do ativo** (1 a 5): fator de 0.6 a 1.4.
+- **IA**: ×0.5 só quando o parecer é "provável falso positivo" com confiança ≥ 8.
+- Findings `falso_positivo` e `corrigido` têm score 0.
 
-Os recursos de IA (`findings suggest-ia` e `report --advice`) usam Gemini
-e exigem `ELMA_GOOGLE_API_KEY` (ou `GOOGLE_API_KEY`). O modelo padrão é
-`gemini-2.5-flash`; use `ELMA_CLOUD_MODEL` para selecionar outro modelo
-Gemini. O código atual não oferece suporte a Ollama nem a
-`ELMA_LLM_PROVIDER`.
+É uma heurística de fila, não um veredito de segurança.
 
-## Comandos
+## Segurança e privacidade
 
-Importar um relatório SARIF:
+- **Mascaramento de segredos** antes de persistir e antes de enviar a qualquer LLM: atribuições `password/token/api_key/secret`, JSON, senha em URL, chaves AWS, tokens GitHub/Google/Slack, JWT, chaves privadas PEM, CPF e CNPJ.
+- **Prompt injection**: conteúdo de findings é tratado como dado não confiável; frases conhecidas (PT e EN) fazem o texto ser substituído por um placeholder.
+- **Tickets**: findings com possível segredo ou do tipo `secrets` geram issue genérica, sem trecho, regra ou caminho. Texto do scanner é escapado e links são removidos.
+- **Comparação de token** em tempo constante e limite de tamanho aplicado durante a leitura do corpo.
 
-```powershell
-python elma_cap8.py import-sarif scan.sarif
+Esses controles são heurísticos (mapeados para OWASP LLM01 e LLM02); regex não garante cobertura total.
+
+## Tickets no GitHub
+
+Ao confirmar manualmente um finding `CRITICAL` (painel, API ou CLI), a Elma cria uma issue no repositório `owner/repo` do próprio finding. A ingestão SARIF nunca cria issue. A criação usa reserva atômica e reconciliação por marcador de fingerprint, e issues são fechadas/reabertas junto com o status do finding.
+
+## Estrutura do projeto
+
+```
+elma/
+  api.py          # FastAPI: ingestão, fila, IA, painel
+  cli.py          # comandos da CLI
+  db.py           # SQLite, migrações, fingerprint, agregações
+  importer.py     # parse SARIF e fechamento de ausentes
+  severity.py     # normalização e gate
+  guardrails.py   # mascaramento e anti prompt injection
+  priorizacao.py  # IA consultiva (Gemini/Ollama)
+  risco.py        # score
+  sla.py          # prazos de remediação
+  metricas.py     # aging, MTTR, tendência
+  tickets.py      # GitHub Issues
+static/index.html # painel
+tests/
+.github/workflows/scan.yml
+elma_cap8.py      # entry point de compatibilidade da CLI
+elma_api.py       # entry point de compatibilidade (uvicorn elma_api:app)
 ```
 
-Uma importação completa retorna código 0. Se o SARIF contiver runs ou
-resultados descartados por estrutura inválida, os findings válidos ainda
-são importados, a CLI informa as contagens e retorna código 2.
+## Limitações conhecidas (v1)
 
-Informe opcionalmente o tipo do scan (`sast`, `sca`, `secrets`, `iac`,
-`container`, `k8s` ou `dast`); esse metadado não altera o fingerprint:
+- Autenticação por **uma API key estática compartilhada**, sem token por repositório nem multi-tenant.
+- SQLite local: não exponha a API publicamente sem rate limit e controle de acesso no deploy.
+- MTTR só considera findings com timestamp de resolução (fechamento automático); correções manuais não entram na amostra.
 
-```powershell
-python elma_cap8.py import-sarif scan.sarif --tipo iac
-```
+## Licença
 
-Escopar o fingerprint a um repositório específico (recomendado sempre que
-o mesmo banco de findings é compartilhado entre repositórios ou também é
-alimentado pela API HTTP, para que ingestões via CLI e via API do mesmo
-achado resolvam para o mesmo fingerprint):
-
-```powershell
-python elma_cap8.py import-sarif scan.sarif --repo org/repo
-```
-
-Revisar findings e inspecionar um pelo fingerprint:
-
-```powershell
-python elma_cap8.py findings list --status novo
-python elma_cap8.py findings list --tipo iac
-python elma_cap8.py findings show FINGERPRINT
-```
-
-Gerar sugestões consultivas e estruturadas de priorização com IA:
-
-```powershell
-python elma_cap8.py findings suggest-ia --severity HIGH --limit 20
-```
-
-As sugestões são só consultivas; elas nunca alteram o status de um finding
-automaticamente. Use `--force` para reprocessar sugestões já existentes. Os
-achados são processados do mais severo pro menos severo (`CRITICAL` →
-`HIGH` → `MEDIUM` → `LOW` → `INFO`); omita `--severity` e use `--limit`
-para triar primeiro os achados mais críticos.
-
-Atualizar o status de triagem (`novo`, `confirmado`, `falso_positivo` ou
-`corrigido`):
-
-```powershell
-python elma_cap8.py findings status FINGERPRINT falso_positivo
-```
-
-Gerar um relatório no terminal ou um PDF com selo SHA-256:
-
-```powershell
-python elma_cap8.py report
-python elma_cap8.py report --format pdf --output posture.pdf
-python elma_cap8.py report --advice
-```
-
-Avaliar um relatório SARIF no CI. O comando sai com código 1 quando um
-achado ativo atinge ou ultrapassa o limite selecionado ou quando o SARIF
-contém runs/resultados descartados; o limite padrão é `HIGH`. Achados
-marcados como `falso_positivo` são excluídos. Achados com
-severidade ausente ou não reconhecida são armazenados como `UNKNOWN` e
-reprovam o gate independente de `--fail-on`, para que metadados
-incompletos do scanner não passem silenciosamente pelo CI. A Elma
-normaliza a severidade durante a importação do SARIF e armazena apenas
-`CRITICAL`, `HIGH`, `MEDIUM`, `LOW`, `INFO` ou `UNKNOWN`. Os níveis SARIF
-`error`, `warning`, `note` e `none` mapeiam para `HIGH`, `MEDIUM`, `LOW` e
-`INFO`; scores numéricos de security-severity mapeiam para a faixa
-correspondente. Por isso, `warning` sozinho não atinge o limite padrão
-`HIGH`. Bancos existentes são normalizados automaticamente na primeira
-abertura após essa atualização.
-
-```powershell
-python elma_cap8.py ci scan.sarif
-python elma_cap8.py ci scan.sarif --fail-on MEDIUM
-python elma_cap8.py ci scan.sarif --repo org/repo
-python elma_cap8.py ci scan.sarif --tipo container
-```
-
-O `ci` nunca chama um provedor de LLM; a decisão de pass/fail continua
-determinística e não depende de acesso de rede ao Gemini.
-
-Use `--db CAMINHO` em qualquer comando para selecionar um banco diferente
-do padrão configurado. O parecer de IA é complementar e não afeta as
-decisões do CI.
-
-## API SARIF
-
-A API HTTP opcional aceita SARIF em `POST /findings`. Defina `ELMA_API_KEY`
-e, se necessário, `ELMA_DB_PATH` antes de subir o serviço:
-
-```powershell
-uvicorn elma_api:app --host 0.0.0.0 --port 8000
-```
-
-Envie `Authorization: Bearer <ELMA_API_KEY>` e um corpo JSON contendo
-`sarif`; `fail_on` tem padrão `HIGH`. Uma avaliação concluída sempre
-retorna HTTP 200; inspecione o campo `aprovado` do JSON pra decidir se o
-gate de vulnerabilidades e SARIF deve passar. Um valor `false` inclui os
-detalhes dos bloqueadores. Se `fechar_ausentes=true`, a resposta também
-informa `fechamento_bloqueado` e `motivo_fechamento`; isso indica fechamento
-pendente e requer ação do operador, sem alterar o significado de `aprovado`.
-Para solicitar fechamento, informe `repositorio` e `tipo_scan`; a API retorna
-422 se qualquer um estiver ausente. Um scan sem findings só fecha ausentes
-quando a ferramenta atesta sucesso explicitamente em uma invocação SARIF.
-O Trivy não inclui esse atestado na saída SARIF, então o workflow da Elma o
-acrescenta somente se o step do scanner terminar com sucesso. A proteção de
-fechamento em massa continua ativa para scans sem sucesso explícito; scans
-sem findings e sem esse atestado não são elegíveis para fechamento.
-Credenciais inválidas retornam 401, requisições malformadas retornam 400 ou
-422, corpos grandes demais retornam 413, e conflitos de fingerprint retornam
-409. O limite de tamanho do corpo é aplicado durante
-a leitura da requisição, inclusive quando `Content-Length` está ausente. A
-API usa o mesmo banco SQLite e as mesmas limitações de chave única
-descritas em `elma_api.py`; não exponha esse serviço v1 publicamente sem
-um limite de requisições e controle de acesso em nível de deployment.
-
-O campo opcional `repositorio` no corpo da requisição escopa o
-fingerprint da mesma forma que `--repo` faz na CLI; use o mesmo
-identificador nos dois caminhos para um dado repositório, para que
-ingestões via CLI e via API do mesmo achado resolvam para o mesmo
-fingerprint.
-
-O painel calcula `ultimo_scan` pelo histórico de importações, inclusive
-quando um scan válido não encontra findings. Importações também registram
-`descartados`, a soma de runs e resultados ignorados por estrutura inválida.
-O campo `lidos` conta somente resultados SARIF válidos que foram analisados.
-
-O campo opcional `tipo_scan` aceita `sast`, `sca`, `secrets`, `iac`,
-`container`, `k8s` ou `dast`; por exemplo:
-`{"sarif": {...}, "tipo_scan": "iac"}`.
-Esse metadado também não altera o fingerprint.
-
-O mascaramento de segredos e a filtragem de prompt injection oferecem
-controles heurísticos mapeados para OWASP LLM02 (Sensitive Information
-Disclosure) e LLM01 (Prompt Injection); a detecção por regex não é
-garantia de que todo segredo ou toda injeção sejam detectados.
-
-## Tickets GitHub
-
-O módulo `elma_tickets.py` mantém a integração de issues isolada da API e
-da CLI. A confirmação manual de um finding `CRITICAL` pela dashboard/API
-ou pelo comando `findings status FINGERPRINT confirmado` tenta criar a
-issue no repositório `owner/repo` correspondente. Findings de outras
-severidades não criam issue. A ingestão SARIF não dispara criação.
-O endpoint retorna o resultado no campo `ticket`; a CLI e a dashboard
-mostram o resultado, inclusive dry-run, falha ou motivo de inelegibilidade.
-
-Configure `ELMA_GITHUB_TOKEN` com permissão de escrita de issues apenas nos
-repositórios necessários. `ELMA_TICKETS_ATIVO` é `false` por padrão e
-`ELMA_TICKETS_DRY_RUN` é `true` por padrão; a ativação real exige habilitar
-o interruptor e desligar o dry-run explicitamente. `ELMA_DASHBOARD_URL`
-define a base do painel; se omitida, usa `ELMA_API_URL` ou
-`http://localhost:8000`. Findings marcados como possível segredo recebem
-corpo e título genéricos, sem mensagem, trecho, regra ou caminho do scanner.
-Todo finding do tipo `secrets` recebe o mesmo tratamento, mesmo quando a
-detecção heurística de segredo não é acionada. A criação usa uma reserva
-atômica por finding; reservas abandonadas expiram após dez minutos e podem
-ser retomadas com reconciliação pelo fingerprint.
-
-Não coloque tokens em arquivos versionados. As credenciais locais devem
-ficar apenas no `.env` ignorado pelo Git ou no gerenciador de secrets do
-ambiente de execução.
+Defina a licença do projeto (por exemplo MIT) e adicione o arquivo `LICENSE`.
