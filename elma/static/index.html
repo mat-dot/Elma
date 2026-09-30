@@ -1,0 +1,1863 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Elma ASPM — Painel</title>
+<style>
+  :root {
+    --bg: #0f172a;
+    --bg-2: #1e293b;
+    --bg-3: #334155;
+    --border: #475569;
+    --text: #e2e8f0;
+    --text-dim: #94a3b8;
+    --primary: #3b82f6;
+    --primary-hover: #2563eb;
+    --critical: #ef4444;
+    --high: #f97316;
+    --medium: #eab308;
+    --low: #22c55e;
+    --info: #06b6d4;
+    --unknown: #a855f7;
+    --novo: #ef4444;
+    --confirmado: #f97316;
+    --falso-positivo: #64748b;
+    --corrigido: #22c55e;
+    --internet: #ef4444;
+    --interna: #22c55e;
+    --gap: 12px;
+    --radius: 8px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+    min-height: 100vh;
+  }
+
+  /* ===== Login ===== */
+  #login-screen {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 24px;
+  }
+  #login-screen.hidden { display: none; }
+  .login-box {
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 32px;
+    width: 100%;
+    max-width: 420px;
+  }
+  .login-box h1 {
+    font-size: 24px;
+    margin-bottom: 8px;
+    color: var(--text);
+  }
+  .login-box p {
+    color: var(--text-dim);
+    margin-bottom: 24px;
+    font-size: 14px;
+  }
+  .login-box label {
+    display: block;
+    font-size: 13px;
+    margin-bottom: 6px;
+    color: var(--text-dim);
+    font-weight: 600;
+  }
+  .login-box input {
+    width: 100%;
+    padding: 10px 12px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-size: 14px;
+    font-family: monospace;
+    margin-bottom: 16px;
+  }
+  .login-box input:focus {
+    outline: none;
+    border-color: var(--primary);
+  }
+  .btn {
+    padding: 10px 16px;
+    background: var(--primary);
+    color: white;
+    border: none;
+    border-radius: var(--radius);
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .btn:hover { background: var(--primary-hover); }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-secondary {
+    background: var(--bg-3);
+  }
+  .btn-secondary:hover { background: var(--border); }
+  .btn-danger { background: var(--critical); }
+  .btn-danger:hover { background: #dc2626; }
+  .btn-success { background: var(--corrigido); color: #052e16; }
+  .btn-success:hover { background: #16a34a; color: #052e16; }
+  .btn-warning { background: var(--medium); color: #422006; }
+  .btn-warning:hover { background: #ca8a04; }
+  .btn-muted { background: var(--falso-positivo); }
+  .btn-muted:hover { background: #475569; }
+
+  .error-msg {
+    color: var(--critical);
+    font-size: 13px;
+    margin-top: 8px;
+    min-height: 18px;
+  }
+
+  /* ===== App ===== */
+  #app-screen.hidden { display: none; }
+
+  header {
+    background: var(--bg-2);
+    border-bottom: 1px solid var(--border);
+    padding: 12px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+  header h1 {
+    font-size: 18px;
+    font-weight: 700;
+  }
+  header h1 span {
+    color: var(--primary);
+  }
+  .header-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .inline-control {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+  .inline-control select {
+    background: var(--bg-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 12px;
+  }
+  .refresh-indicator {
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  main {
+    padding: 24px;
+    max-width: 1600px;
+    margin: 0 auto;
+  }
+
+  section {
+    margin-bottom: 32px;
+  }
+  section h2 {
+    font-size: 16px;
+    font-weight: 700;
+    margin-bottom: 12px;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  section h2::before {
+    content: "";
+    display: block;
+    width: 3px;
+    height: 16px;
+    background: var(--primary);
+    border-radius: 2px;
+  }
+
+  /* ===== KPIs ===== */
+  .kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: var(--gap);
+  }
+  .kpi-card {
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+  }
+  .kpi-label {
+    font-size: 12px;
+    color: var(--text-dim);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 6px;
+  }
+  .kpi-value {
+    font-size: 28px;
+    font-weight: 700;
+    line-height: 1.1;
+  }
+  .kpi-sub {
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-top: 4px;
+  }
+  .kpi-critical .kpi-value { color: var(--critical); }
+  .kpi-high .kpi-value { color: var(--high); }
+  .kpi-medium .kpi-value { color: var(--medium); }
+  .kpi-low .kpi-value { color: var(--low); }
+  .kpi-info .kpi-value { color: var(--info); }
+  .kpi-novo .kpi-value { color: var(--novo); }
+  .kpi-confirmado .kpi-value { color: var(--confirmado); }
+  .kpi-fp .kpi-value { color: var(--falso-positivo); }
+  .kpi-corrigido .kpi-value { color: var(--corrigido); }
+  .kpi-segredos .kpi-value { color: var(--unknown); }
+  .kpi-recentes .kpi-value { color: var(--primary); }
+
+  .severity-bar {
+    display: flex;
+    gap: 4px;
+    margin-top: 12px;
+    height: 8px;
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .severity-bar > div { height: 100%; }
+  .bar-critical { background: var(--critical); }
+  .bar-high { background: var(--high); }
+  .bar-medium { background: var(--medium); }
+  .bar-low { background: var(--low); }
+  .bar-info { background: var(--info); }
+  .bar-unknown { background: var(--unknown); }
+
+  /* ===== Badges ===== */
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    line-height: 1.6;
+  }
+  .badge-severity-CRITICAL { background: rgba(239,68,68,0.2); color: var(--critical); }
+  .badge-severity-HIGH { background: rgba(249,115,22,0.2); color: var(--high); }
+  .badge-severity-MEDIUM { background: rgba(234,179,8,0.2); color: var(--medium); }
+  .badge-severity-LOW { background: rgba(34,197,94,0.2); color: var(--low); }
+  .badge-severity-INFO { background: rgba(6,182,212,0.2); color: var(--info); }
+  .badge-severity-UNKNOWN { background: rgba(168,85,247,0.2); color: var(--unknown); }
+
+  .badge-status-novo { background: rgba(239,68,68,0.2); color: var(--novo); }
+  .badge-status-confirmado { background: rgba(249,115,22,0.2); color: var(--confirmado); }
+  .badge-status-falso_positivo { background: rgba(100,116,139,0.3); color: var(--text-dim); }
+  .badge-status-corrigido { background: rgba(34,197,94,0.2); color: var(--corrigido); }
+
+  .badge-exposicao-internet { background: rgba(239,68,68,0.2); color: var(--internet); }
+  .badge-exposicao-interna { background: rgba(34,197,94,0.2); color: var(--interna); }
+
+  .badge-tipo-webapp { background: rgba(59,130,246,0.2); color: var(--primary); }
+  .badge-tipo-api { background: rgba(168,85,247,0.2); color: var(--unknown); }
+  .badge-tipo-lib { background: rgba(6,182,212,0.2); color: var(--info); }
+
+  .badge-scan { background: var(--bg-3); color: var(--text-dim); font-weight: 500; }
+  .badge-scan.gap { opacity: 0.4; }
+
+  .badge-segredo { background: rgba(168,85,247,0.2); color: var(--unknown); }
+  .badge-score { background: var(--bg-3); color: var(--text); font-weight: 700; min-width: 36px; justify-content: center; }
+
+  /* ===== Tables ===== */
+  .table-wrap {
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow-x: auto;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  th, td {
+    padding: 10px 12px;
+    text-align: left;
+    border-bottom: 1px solid var(--bg-3);
+    vertical-align: top;
+  }
+  th {
+    background: var(--bg-3);
+    font-weight: 700;
+    font-size: 12px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    position: sticky;
+    top: 0;
+    white-space: nowrap;
+  }
+  tr:last-child td { border-bottom: none; }
+  tbody tr { cursor: pointer; transition: background 0.1s; }
+  tbody tr:hover { background: rgba(59,130,246,0.08); }
+  tbody tr.selected { background: rgba(59,130,246,0.15); }
+
+  .cell-stack > * + * { margin-top: 4px; }
+  .cell-badges { display: flex; flex-wrap: wrap; gap: 4px; }
+  .cell-code {
+    font-family: monospace;
+    font-size: 12px;
+    color: var(--text-dim);
+    word-break: break-all;
+  }
+  .cell-mono { font-family: monospace; font-size: 12px; }
+
+  .text-dim { color: var(--text-dim); }
+  .text-small { font-size: 12px; }
+
+  /* ===== Asset criticidade stars ===== */
+  .crit-stars { color: var(--medium); letter-spacing: 1px; }
+
+  /* ===== Filtros ===== */
+  .filters-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 12px;
+    padding: 12px;
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+  }
+  .filters-bar select,
+  .filters-bar input {
+    padding: 8px 10px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 13px;
+  }
+  .filters-bar select:focus,
+  .filters-bar input:focus {
+    outline: none;
+    border-color: var(--primary);
+  }
+  .filters-bar label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--text-dim);
+    cursor: pointer;
+  }
+  .filters-bar input[type="checkbox"] {
+    cursor: pointer;
+  }
+  .spacer { flex: 1; }
+
+  /* ===== Paginação ===== */
+  .pagination {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px;
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-top: none;
+    border-radius: 0 0 var(--radius) var(--radius);
+    font-size: 13px;
+    color: var(--text-dim);
+  }
+  .pagination-controls { display: flex; gap: 4px; }
+  .pagination-controls button {
+    padding: 6px 12px;
+    background: var(--bg-3);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .pagination-controls button:hover:not(:disabled) { background: var(--border); }
+  .pagination-controls button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* ===== Detail Drawer ===== */
+  .drawer-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+    z-index: 200;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s;
+  }
+  .drawer-backdrop.open { opacity: 1; pointer-events: auto; }
+  .drawer {
+    position: fixed;
+    top: 0;
+    right: 0;
+    height: 100vh;
+    width: min(620px, 95vw);
+    background: var(--bg-2);
+    border-left: 1px solid var(--border);
+    z-index: 201;
+    transform: translateX(100%);
+    transition: transform 0.25s ease;
+    display: flex;
+    flex-direction: column;
+  }
+  .drawer.open { transform: translateX(0); }
+  .drawer-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .drawer-header h3 {
+    font-size: 16px;
+    font-weight: 700;
+    margin-bottom: 6px;
+    word-break: break-word;
+  }
+  .close-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-dim);
+    font-size: 22px;
+    cursor: pointer;
+    padding: 0 4px;
+    line-height: 1;
+  }
+  .close-btn:hover { color: var(--text); }
+  .drawer-body {
+    padding: 20px;
+    overflow-y: auto;
+    flex: 1;
+  }
+  .drawer-footer {
+    padding: 16px 20px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .drawer-footer-label {
+    width: 100%;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    margin-bottom: 4px;
+  }
+
+  .detail-section { margin-bottom: 20px; }
+  .detail-section h4 {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    margin-bottom: 8px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--bg-3);
+  }
+  .detail-grid {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 6px 16px;
+    font-size: 13px;
+  }
+  .detail-grid .dt { color: var(--text-dim); font-weight: 500; }
+  .detail-grid .dd { word-break: break-word; }
+
+  .score-breakdown {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px;
+    margin-top: 8px;
+  }
+  .score-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 4px 0;
+    font-size: 13px;
+  }
+  .score-row.total {
+    border-top: 1px solid var(--border);
+    margin-top: 6px;
+    padding-top: 8px;
+    font-weight: 700;
+    font-size: 15px;
+  }
+  .score-formula {
+    font-family: monospace;
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-top: 8px;
+    text-align: right;
+  }
+
+  pre.evidence {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px;
+    font-family: monospace;
+    font-size: 12px;
+    white-space: pre-wrap;
+    word-break: break-all;
+    color: var(--text);
+    max-height: 280px;
+    overflow-y: auto;
+  }
+
+  .ai-suggestion {
+    background: rgba(168,85,247,0.1);
+    border: 1px solid rgba(168,85,247,0.3);
+    border-radius: 6px;
+    padding: 12px;
+    font-size: 13px;
+  }
+  .ai-suggestion .ai-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+    font-weight: 700;
+    color: var(--unknown);
+  }
+
+  .loading {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    border: 2px solid var(--bg-3);
+    border-top-color: var(--primary);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    vertical-align: middle;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .empty-state {
+    padding: 40px 20px;
+    text-align: center;
+    color: var(--text-dim);
+  }
+  .empty-state.hidden { display: none; }
+  .empty-state p:first-child { font-size: 32px; margin-bottom: 8px; opacity: 0.4; }
+
+  .toast {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    padding: 12px 20px;
+    border-radius: var(--radius);
+    font-size: 14px;
+    font-weight: 600;
+    z-index: 300;
+    opacity: 0;
+    transform: translateY(20px);
+    transition: all 0.25s;
+    pointer-events: none;
+    box-shadow: 0 10px 25px rgba(0,0,0,0.3);
+  }
+  .toast.show { opacity: 1; transform: translateY(0); }
+  .toast-success { background: var(--corrigido); color: #052e16; }
+  .toast-error { background: var(--critical); color: white; }
+  .toast-info { background: var(--primary); color: white; }
+</style>
+</head>
+<body>
+
+<!-- ===== Login Screen ===== -->
+<div id="login-screen">
+  <div class="login-box">
+    <h1>Elma <span style="color:var(--primary)">ASPM</span></h1>
+    <p>Single Pane of Glass. Insira sua chave de API para começar.</p>
+    <label for="api-key-input">Chave de API (Bearer Token)</label>
+    <input type="password" id="api-key-input" autocomplete="off" placeholder="ELMA_API_KEY..." />
+    <button class="btn" id="login-btn" style="width:100%">Entrar</button>
+    <div class="error-msg" id="login-error"></div>
+  </div>
+</div>
+
+<!-- ===== App Screen ===== -->
+<div id="app-screen" class="hidden">
+  <header>
+    <h1>Elma <span>ASPM</span> — Painel de Postura</h1>
+    <div class="header-actions">
+      <label class="inline-control" for="ai-provider">
+        IA
+        <select id="ai-provider">
+          <option value="gemini">Gemini</option>
+          <option value="ollama">Ollama</option>
+        </select>
+      </label>
+      <label class="inline-control" for="ai-model">
+        Modelo
+        <select id="ai-model"></select>
+      </label>
+      <button class="btn btn-secondary" id="ai-analyze-batch" title="Analisar IA em lote">
+        🤖 Analisar IA
+      </button>
+      <span class="refresh-indicator" id="refresh-time"></span>
+      <button class="btn btn-secondary" id="refresh-btn" title="Atualizar">
+        ↻ Atualizar
+      </button>
+      <button class="btn btn-secondary" id="logout-btn" title="Sair">
+        Sair
+      </button>
+    </div>
+  </header>
+
+  <main>
+    <!-- ===== KPIs ===== -->
+    <section>
+      <h2>Postura Geral</h2>
+      <div class="kpi-grid" id="kpi-grid"></div>
+      <div class="severity-bar" id="severity-bar" style="margin-top:12px"></div>
+    </section>
+
+    <!-- ===== Métricas ===== -->
+    <section>
+      <h2>Métricas</h2>
+      <div class="kpi-grid" id="metricas-kpi"></div>
+      <div style="margin-top:14px">
+        <div class="text-small text-dim" style="margin-bottom:6px">Aging dos findings abertos</div>
+        <div class="severity-bar" id="aging-bar"></div>
+        <div id="aging-legend" class="text-small text-dim" style="margin-top:6px"></div>
+      </div>
+      <div class="table-wrap" style="margin-top:16px">
+        <table>
+          <thead>
+            <tr><th>Data</th><th>Novos</th><th>Fechados</th><th>Lidos</th></tr>
+          </thead>
+          <tbody id="tendencia-tbody"></tbody>
+        </table>
+        <div class="empty-state hidden" id="tendencia-empty">
+          <p>📈</p><p>Sem histórico de importações ainda.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== Ativos ===== -->
+    <section>
+      <h2>Ativos</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Ativo</th>
+              <th>Tipo</th>
+              <th>Exposição</th>
+              <th>Criticidade</th>
+              <th>Total Findings</th>
+              <th>Por Severidade</th>
+              <th>Tipos de Scan (último)</th>
+              <th>Lacunas</th>
+            </tr>
+          </thead>
+          <tbody id="ativos-tbody"></tbody>
+        </table>
+        <div class="empty-state hidden" id="ativos-empty">
+          <p>📦</p><p>Nenhum ativo cadastrado ainda. Rode uma ingestão com <code>--repo</code>.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== Fila Priorizada ===== -->
+    <section>
+      <h2>Fila Priorizada</h2>
+      <div class="filters-bar" id="filters-bar">
+        <select id="filter-status">
+          <option value="">Status: todos</option>
+          <option value="novo">Apenas novos</option>
+          <option value="confirmado">Apenas confirmados</option>
+          <option value="falso_positivo">Apenas falsos positivos</option>
+          <option value="corrigido">Apenas corrigidos</option>
+        </select>
+        <select id="filter-severity">
+          <option value="">Severidade: todas</option>
+          <option value="CRITICAL">CRITICAL</option>
+          <option value="HIGH">HIGH</option>
+          <option value="MEDIUM">MEDIUM</option>
+          <option value="LOW">LOW</option>
+          <option value="INFO">INFO</option>
+          <option value="UNKNOWN">UNKNOWN</option>
+        </select>
+        <select id="filter-tipo-scan">
+          <option value="">Tipo de scan: todos</option>
+          <option value="sast">SAST</option>
+          <option value="sca">SCA</option>
+          <option value="secrets">Secrets</option>
+          <option value="iac">IaC</option>
+          <option value="container">Container</option>
+          <option value="k8s">K8s</option>
+          <option value="dast">DAST</option>
+        </select>
+        <select id="filter-repositorio">
+          <option value="">Repositório: todos</option>
+        </select>
+        <select id="filter-exposicao">
+          <option value="">Exposição: todas</option>
+          <option value="internet">Apenas internet</option>
+          <option value="interna">Apenas interna</option>
+        </select>
+        <select id="filter-criticidade">
+          <option value="">Criticidade: todas</option>
+          <option value="1">Mínimo 1 ★</option>
+          <option value="2">Mínimo 2 ★★</option>
+          <option value="3">Mínimo 3 ★★★</option>
+          <option value="4">Mínimo 4 ★★★★</option>
+          <option value="5">Mínimo 5 ★★★★★</option>
+        </select>
+        <label><input type="checkbox" id="filter-segredo" /> Só segredos</label>
+        <label><input type="checkbox" id="filter-atrasado" /> Só SLA atrasado</label>
+        <div class="spacer"></div>
+        <select id="filter-limit">
+          <option value="25">25 por página</option>
+          <option value="50" selected>50 por página</option>
+          <option value="100">100 por página</option>
+          <option value="200">200 por página</option>
+        </select>
+      </div>
+      <div class="table-wrap" style="border-radius: var(--radius) var(--radius) 0 0;">
+        <table>
+          <thead>
+            <tr>
+              <th>Score</th>
+              <th>Severidade</th>
+              <th>Status</th>
+              <th>Ativo</th>
+              <th>Regra</th>
+              <th>Arquivo:Linha</th>
+              <th>Scanner</th>
+              <th>Tipo</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="fila-tbody"></tbody>
+        </table>
+        <div class="empty-state hidden" id="fila-empty">
+          <p>🎯</p><p>Nenhum finding encontrado com os filtros atuais.</p>
+        </div>
+      </div>
+      <div class="pagination" id="pagination">
+        <div id="pagination-info">Carregando...</div>
+        <div class="pagination-controls">
+          <button id="prev-page" disabled>← Anterior</button>
+          <button id="next-page" disabled>Próximo →</button>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- ===== Detail Drawer ===== -->
+<div class="drawer-backdrop" id="drawer-backdrop"></div>
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true">
+  <div class="drawer-header">
+    <div style="min-width:0">
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px" id="detail-badges"></div>
+      <h3 id="detail-title">Carregando...</h3>
+      <div class="text-small text-dim" id="detail-subtitle"></div>
+    </div>
+    <button class="close-btn" id="drawer-close" aria-label="Fechar">×</button>
+  </div>
+  <div class="drawer-body" id="drawer-body">
+    <div class="detail-section">
+      <h4>Score de Risco</h4>
+      <div id="detail-score" class="score-breakdown"></div>
+    </div>
+    <div class="detail-section">
+      <h4>Detalhes do Finding</h4>
+      <div class="detail-grid" id="detail-info"></div>
+    </div>
+    <div class="detail-section" id="detail-message-section" style="display:none">
+      <h4>Mensagem</h4>
+      <div id="detail-message"></div>
+    </div>
+    <div class="detail-section" id="detail-evidence-section" style="display:none">
+      <h4>Evidência (Trecho)</h4>
+      <pre class="evidence" id="detail-evidence"></pre>
+    </div>
+    <div class="detail-section" id="detail-ai-section" style="display:none">
+      <h4>Sugestão da IA</h4>
+      <div id="detail-ai"></div>
+    </div>
+    <div class="detail-section" id="detail-remediation-section" style="display:none">
+      <h4>Remediação (IA)</h4>
+      <div id="detail-remediation"></div>
+    </div>
+    <div class="detail-section" id="detail-asset-section" style="display:none">
+      <h4>Ativo Relacionado</h4>
+      <div class="detail-grid" id="detail-asset"></div>
+    </div>
+  </div>
+  <div class="drawer-footer">
+    <div class="drawer-footer-label">Triagem Manual</div>
+    <button class="btn btn-muted" data-action="falso_positivo">Falso Positivo</button>
+    <button class="btn btn-warning" data-action="confirmado">Confirmar</button>
+    <button class="btn btn-success" data-action="corrigido">Marcar Corrigido</button>
+    <button class="btn btn-secondary" data-action="novo">Reabrir (Novo)</button>
+  </div>
+</aside>
+
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+
+/* =========================================================
+   STATE
+   ========================================================= */
+const state = {
+  apiBase: "",
+  filaOffset: 0,
+  filaCurrent: [],
+  filaTotal: 0,
+  ativos: [],
+  selectedFingerprint: null,
+  aiConfig: { provider: "gemini", model: "gemini-2.5-flash" },
+  aiBusy: false,
+};
+
+/* =========================================================
+   UTILS
+   ========================================================= */
+function $(id) { return document.getElementById(id); }
+
+function apiKey() { return sessionStorage.getItem("elma_api_key") || ""; }
+
+function authHeaders() {
+  return {
+    "Authorization": "Bearer " + apiKey(),
+    "Accept": "application/json",
+  };
+}
+
+async function apiCall(endpoint, options = {}) {
+  const requestOptions = { ...options };
+  const timeoutMs = requestOptions.timeoutMs;
+  delete requestOptions.timeoutMs;
+  const controller = timeoutMs ? new AbortController() : null;
+  const timeoutId = controller
+    ? setTimeout(() => controller.abort(), timeoutMs)
+    : null;
+  let res;
+  try {
+    res = await fetch(endpoint, {
+      ...requestOptions,
+      ...(controller ? { signal: controller.signal } : {}),
+      headers: {
+        ...authHeaders(),
+        ...(options.body ? { "Content-Type": "application/json" } : {}),
+        ...(options.headers || {}),
+      },
+    });
+  } catch (err) {
+    if (controller && controller.signal.aborted) {
+      throw new Error("A IA excedeu o tempo limite de 120 segundos. Confira o modelo e os logs do servidor.");
+    }
+    throw err;
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+  if (res.status === 401) {
+    logout();
+    throw new Error("Não autorizado — chave inválida ou expirada.");
+  }
+  if (!res.ok) {
+    let msg = "Erro " + res.status;
+    try {
+      const err = await res.json();
+      if (err.detail) {
+        msg = typeof err.detail === "string" ? err.detail : JSON.stringify(err.detail);
+      }
+    } catch (_) {}
+    throw new Error(msg);
+  }
+  return res.json();
+}
+
+function el(tag, props = {}, children = []) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(props || {})) {
+    if (k === "class") el.className = v;
+    else if (k === "style") el.style.cssText = v;
+    else if (k.startsWith("on") && typeof v === "function") el.addEventListener(k.slice(2), v);
+    else if (k === "dataset" && typeof v === "object") Object.assign(el.dataset, v);
+    else el.setAttribute(k, v);
+  }
+  for (const c of [].concat(children)) {
+    if (c == null) continue;
+    el.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+  }
+  return el;
+}
+
+function setText(elId, text) {
+  const node = $(elId);
+  if (node) node.textContent = text == null ? "" : String(text);
+}
+
+function showToast(message, kind = "info", duration = 2800) {
+  const toast = $("toast");
+  toast.className = "toast toast-" + kind + " show";
+  toast.textContent = message;
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(() => { toast.classList.remove("show"); }, duration);
+}
+
+function fmtDate(iso) {
+  if (!iso) return "—";
+  try {
+    const d = new Date(iso);
+    if (isNaN(d)) return iso;
+    return d.toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
+  } catch (_) { return iso; }
+}
+
+function criticidadeStars(n) {
+  const num = Math.max(1, Math.min(5, Number(n) || 0));
+  return "★".repeat(num) + "☆".repeat(5 - num);
+}
+
+function currentAIConfig() {
+  const provider = $("ai-provider").value || state.aiConfig.provider || "gemini";
+  const model = $("ai-model").value || state.aiConfig.model || "gemini-2.5-flash";
+  return { provider, model };
+}
+
+const AI_PRESETS = {
+  gemini: ["gemini-2.5-flash", "gemini-2.5-pro"],
+  ollama: ["llama3.1", "mistral", "qwen2.5"],
+};
+
+// Modelo configurado no servidor (ELMA_CLOUD_MODEL / ELMA_OLLAMA_MODEL) por provider.
+function modeloEnv(provider) {
+  return (state.aiModelos && state.aiModelos[provider]) || null;
+}
+
+function preencherModelos(provider) {
+  const preset = AI_PRESETS[provider] || [];
+  const env = modeloEnv(provider);
+  // O modelo do env sempre entra na lista e tem prioridade sobre os presets.
+  const available = env && !preset.includes(env)
+    ? [env, ...preset]
+    : (preset.length ? [...preset] : [env || "gemini-2.5-flash"]);
+  $("ai-model").innerHTML = "";
+  for (const option of available) {
+    const opt = document.createElement("option");
+    opt.value = option;
+    opt.textContent = option;
+    $("ai-model").appendChild(opt);
+  }
+  return available;
+}
+
+async function loadAIConfig() {
+  try {
+    const cfg = await apiCall("/ai/config");
+    state.aiConfig = cfg;
+    state.aiModelos = cfg.modelos || {};
+    const provider = localStorage.getItem("elma_ai_provider") || cfg.provider || "gemini";
+    $("ai-provider").value = ["gemini", "ollama"].includes(provider) ? provider : cfg.provider || "gemini";
+    const ativo = $("ai-provider").value;
+    const available = preencherModelos(ativo);
+    // O modelo do env é a fonte de verdade; um valor guardado só vale se ainda
+    // existir na lista. Isso evita que um fallback antigo sobrescreva o env.
+    const env = modeloEnv(ativo) || cfg.model;
+    const guardado = localStorage.getItem("elma_ai_model");
+    const preferido = (env && available.includes(env))
+      ? env
+      : (guardado && available.includes(guardado) ? guardado : available[0]);
+    $("ai-model").value = preferido;
+    localStorage.setItem("elma_ai_provider", ativo);
+    localStorage.setItem("elma_ai_model", preferido);
+    state.aiConfig = { provider: ativo, model: preferido };
+  } catch (err) {
+    $("ai-provider").value = localStorage.getItem("elma_ai_provider") || "gemini";
+    $("ai-model").innerHTML = "<option value='gemini-2.5-flash'>gemini-2.5-flash</option>";
+    $("ai-model").value = localStorage.getItem("elma_ai_model") || "gemini-2.5-flash";
+    state.aiConfig = currentAIConfig();
+  }
+}
+
+/* =========================================================
+   BADGES
+   ========================================================= */
+function sevBadge(sev) {
+  const s = String(sev || "UNKNOWN").toUpperCase();
+  return el("span", { class: "badge badge-severity-" + s }, s);
+}
+function statusBadge(s) {
+  const map = { novo: "Novo", confirmado: "Confirmado", falso_positivo: "Falso +", corrigido: "Corrigido" };
+  return el("span", { class: "badge badge-status-" + s }, map[s] || s || "Novo");
+}
+function tipoBadge(t) {
+  return el("span", { class: "badge badge-tipo-" + (t || "webapp") }, t || "webapp");
+}
+function expBadge(e) {
+  const val = e || "interna";
+  return el("span", { class: "badge badge-exposicao-" + val }, val);
+}
+function scanBadge(type, hasScan) {
+  return el("span", { class: "badge badge-scan" + (hasScan ? "" : " gap") }, type.toUpperCase());
+}
+
+/* =========================================================
+   LOGIN / LOGOUT
+   ========================================================= */
+function showLogin() {
+  $("login-screen").classList.remove("hidden");
+  $("app-screen").classList.add("hidden");
+}
+
+function showApp() {
+  $("login-screen").classList.add("hidden");
+  $("app-screen").classList.remove("hidden");
+}
+
+function logout() {
+  sessionStorage.removeItem("elma_api_key");
+  showLogin();
+  $("api-key-input").value = "";
+}
+
+async function doLogin() {
+  const key = $("api-key-input").value.trim();
+  const errDiv = $("login-error");
+  errDiv.textContent = "";
+  if (!key) {
+    errDiv.textContent = "Informe a chave de API.";
+    return;
+  }
+  sessionStorage.setItem("elma_api_key", key);
+  try {
+    await apiCall("/postura");
+    showApp();
+    await loadAIConfig();
+    refreshAll();
+  } catch (err) {
+    sessionStorage.removeItem("elma_api_key");
+    errDiv.textContent = err.message || "Falha na autenticação.";
+  }
+}
+
+/* =========================================================
+   KPI / POSTURA
+   ========================================================= */
+async function loadPostura() {
+  const data = await apiCall("/postura");
+  const grid = $("kpi-grid");
+  grid.innerHTML = "";
+
+  const cards = [
+    { cls: "", label: "Total de Findings", value: data.total,
+      sub: data.novos_7d + " novos nos últimos 7 dias" },
+    { cls: "kpi-critical", label: "CRITICAL", value: data.por_severidade.CRITICAL || 0 },
+    { cls: "kpi-high", label: "HIGH", value: data.por_severidade.HIGH || 0 },
+    { cls: "kpi-medium", label: "MEDIUM", value: data.por_severidade.MEDIUM || 0 },
+    { cls: "kpi-low", label: "LOW", value: data.por_severidade.LOW || 0 },
+    { cls: "kpi-info", label: "INFO", value: data.por_severidade.INFO || 0 },
+    { cls: "kpi-recentes", label: "Novos (7 dias)", value: data.novos_7d || 0 },
+    { cls: "kpi-segredos", label: "Possíveis Segredos", value: data.possiveis_segredos || 0 },
+    { cls: "kpi-critical", label: "SLA Atrasado", value: data.sla?.atrasados || 0,
+      sub: (data.sla?.aplicaveis || 0) + " com SLA ativo" },
+    { cls: "kpi-novo", label: "Status: Novos", value: data.por_status.novo || 0 },
+    { cls: "kpi-confirmado", label: "Confirmados", value: data.por_status.confirmado || 0 },
+    { cls: "kpi-fp", label: "Falsos +", value: data.por_status.falso_positivo || 0 },
+    { cls: "kpi-corrigido", label: "Corrigidos", value: data.por_status.corrigido || 0 },
+  ];
+
+  for (const c of cards) {
+    const card = el("div", { class: "kpi-card " + c.cls });
+    card.appendChild(el("div", { class: "kpi-label" }, c.label));
+    card.appendChild(el("div", { class: "kpi-value" }, String(c.value)));
+    if (c.sub) card.appendChild(el("div", { class: "kpi-sub" }, c.sub));
+    grid.appendChild(card);
+  }
+
+  // Severity bar
+  const bar = $("severity-bar");
+  bar.innerHTML = "";
+  const order = [["CRITICAL","bar-critical"],["HIGH","bar-high"],["MEDIUM","bar-medium"],["LOW","bar-low"],["INFO","bar-info"],["UNKNOWN","bar-unknown"]];
+  const total = Math.max(1, data.total || 0);
+  for (const [s, cls] of order) {
+    const v = data.por_severidade[s] || 0;
+    if (v <= 0) continue;
+    const pct = (v / total) * 100;
+    const div = el("div", { class: cls, title: s + ": " + v });
+    div.style.width = pct + "%";
+    bar.appendChild(div);
+  }
+}
+
+/* =========================================================
+   MÉTRICAS (aging / MTTR / tendência)
+   ========================================================= */
+async function loadMetricas() {
+  const data = await apiCall("/metricas");
+  const aging = data.aging || {};
+  const mttr = data.mttr || {};
+  const sla = data.sla || {};
+
+  const grid = $("metricas-kpi");
+  grid.innerHTML = "";
+  const slaPct = sla.aplicaveis
+    ? Math.round(((sla.aplicaveis - (sla.atrasados || 0)) / sla.aplicaveis) * 100)
+    : null;
+  const cards = [
+    { cls: "kpi-recentes", label: "Aging médio",
+      value: aging.idade_media_dias != null ? aging.idade_media_dias + "d" : "—",
+      sub: (aging.abertos || 0) + " findings abertos" },
+    { cls: "kpi-confirmado", label: "MTTR",
+      value: mttr.mttr_dias != null ? mttr.mttr_dias + "d" : "—",
+      sub: "amostra " + (mttr.amostra || 0) + "/" + (mttr.corrigidos || 0) + " corrigidos" },
+    { cls: slaPct != null && slaPct < 80 ? "kpi-critical" : "kpi-novo", label: "SLA em dia",
+      value: slaPct != null ? slaPct + "%" : "—",
+      sub: (sla.atrasados || 0) + " atrasados de " + (sla.aplicaveis || 0) },
+  ];
+  for (const c of cards) {
+    const card = el("div", { class: "kpi-card " + c.cls });
+    card.appendChild(el("div", { class: "kpi-label" }, c.label));
+    card.appendChild(el("div", { class: "kpi-value" }, String(c.value)));
+    if (c.sub) card.appendChild(el("div", { class: "kpi-sub" }, c.sub));
+    grid.appendChild(card);
+  }
+
+  const bar = $("aging-bar");
+  bar.innerHTML = "";
+  const legend = $("aging-legend");
+  legend.innerHTML = "";
+  const faixas = aging.faixas || {};
+  const ordem = [["0_30","bar-info","0–30"],["31_60","bar-low","31–60"],
+                 ["61_90","bar-medium","61–90"],["90_plus","bar-critical","90+"]];
+  const totalAbertos = Math.max(1, aging.abertos || 0);
+  let temAging = false;
+  for (const [chave, cls, rotulo] of ordem) {
+    const v = faixas[chave] || 0;
+    if (v > 0) temAging = true;
+    const div = el("div", { class: cls, title: rotulo + " dias: " + v });
+    div.style.width = ((v / totalAbertos) * 100) + "%";
+    bar.appendChild(div);
+    legend.appendChild(el("span", { style: "margin-right:14px" }, rotulo + "d: " + v));
+  }
+  if (!temAging) legend.textContent = "Nenhum finding aberto com data válida.";
+
+  const tbody = $("tendencia-tbody");
+  tbody.innerHTML = "";
+  const tendencia = (data.tendencia || []).slice(-14).reverse();
+  $("tendencia-empty").classList.toggle("hidden", tendencia.length > 0);
+  for (const dia of tendencia) {
+    const tr = el("tr");
+    tr.appendChild(el("td", { class: "cell-mono" }, dia.data));
+    tr.appendChild(el("td", {}, String(dia.novos)));
+    tr.appendChild(el("td", {}, String(dia.fechados)));
+    tr.appendChild(el("td", {}, String(dia.lidos)));
+    tbody.appendChild(tr);
+  }
+}
+
+/* =========================================================
+   ATIVOS
+   ========================================================= */
+async function loadAtivos() {
+  const data = await apiCall("/ativos");
+  const items = data.items || [];
+  state.ativos = items;
+
+  // Preenche filtro de repositórios
+  const sel = $("filter-repositorio");
+  const current = sel.value;
+  sel.innerHTML = '<option value="">Repositório: todos</option>';
+  for (const a of items) {
+    const opt = document.createElement("option");
+    opt.value = a.repositorio;
+    opt.textContent = a.nome + " (" + a.repositorio + ")";
+    sel.appendChild(opt);
+  }
+  sel.value = current;
+
+  const tbody = $("ativos-tbody");
+  tbody.innerHTML = "";
+  $("ativos-empty").classList.toggle("hidden", items.length > 0);
+
+  const tiposScan = ["sast","sca","secrets","iac","container","k8s","dast"];
+
+  for (const a of items) {
+    const tr = document.createElement("tr");
+    tr.addEventListener("click", () => {
+      const sel = $("filter-repositorio");
+      sel.value = a.repositorio;
+      state.filaOffset = 0;
+      loadFila();
+      document.getElementById("fila-tbody").scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+
+    // Nome + repo
+    const tdNome = el("td");
+    tdNome.appendChild(el("div", { style: "font-weight:600" }, a.nome || a.repositorio));
+    tdNome.appendChild(el("div", { class: "text-small text-dim cell-mono" }, a.repositorio));
+    if (a.url_alvo) {
+      tdNome.appendChild(el("div", { class: "text-small text-dim" }, a.url_alvo));
+    }
+    tr.appendChild(tdNome);
+
+    tr.appendChild(el("td", {}, tipoBadge(a.tipo)));
+    tr.appendChild(el("td", {}, expBadge(a.exposicao)));
+    tr.appendChild(el("td", {}, [
+      el("span", { class: "crit-stars", title: "Criticidade " + a.criticidade + "/5" }, criticidadeStars(a.criticidade)),
+      " ",
+      el("span", { class: "text-small text-dim" }, String(a.criticidade)),
+    ]));
+
+    tr.appendChild(el("td", { style: "font-weight:700;font-size:15px" }, String(a.total_findings || 0)));
+
+    // Por severidade
+    const tdSev = el("td", { class: "cell-badges" });
+    for (const s of ["CRITICAL","HIGH","MEDIUM","LOW","INFO","UNKNOWN"]) {
+      const v = a.por_severidade?.[s] || 0;
+      if (v > 0) {
+        const b = sevBadge(s);
+        b.textContent = s + " " + v;
+        tdSev.appendChild(b);
+      }
+    }
+    tr.appendChild(tdSev);
+
+    // Scans
+    const tdScan = el("td", { class: "cell-badges" });
+    for (const t of tiposScan) {
+      const info = a.por_tipo_scan?.[t];
+      const total = info?.total || 0;
+      const b = scanBadge(t, info?.ultimo_scan != null);
+      const txt = t.toUpperCase() + (total ? "(" + total + ")" : "");
+      b.textContent = txt;
+      b.title = info?.ultimo_scan
+        ? "Último scan: " + fmtDate(info.ultimo_scan)
+        : "Sem scan registrado";
+      tdScan.appendChild(b);
+    }
+    tr.appendChild(tdScan);
+
+    // Lacunas
+    const tdGap = el("td", { class: "cell-badges" });
+    const lacunas = a.lacunas || [];
+    if (lacunas.length === 0) {
+      tdGap.appendChild(el("span", { class: "text-small text-dim" }, "✓ Completos"));
+    } else {
+      for (const g of lacunas) tdGap.appendChild(scanBadge(g, false));
+    }
+    tr.appendChild(tdGap);
+
+    tbody.appendChild(tr);
+  }
+}
+
+/* =========================================================
+   FILA
+   ========================================================= */
+function currentFiltros() {
+  const f = {};
+  const m = {
+    "filter-status": "status",
+    "filter-severity": "severidade",
+    "filter-tipo-scan": "tipo_scan",
+    "filter-repositorio": "repositorio",
+    "filter-exposicao": "exposicao",
+  };
+  for (const [id, key] of Object.entries(m)) {
+    const v = $(id).value;
+    if (v) f[key] = v;
+  }
+  const crit = $("filter-criticidade").value;
+  if (crit) f.criticidade_min = parseInt(crit, 10);
+  if ($("filter-segredo").checked) f.possivel_segredo = true;
+  if ($("filter-atrasado").checked) f.atrasado = true;
+  return f;
+}
+
+async function loadFila() {
+  const limit = parseInt($("filter-limit").value, 10);
+  const filtros = currentFiltros();
+  const params = new URLSearchParams();
+  for (const [k, v] of Object.entries(filtros)) params.set(k, String(v));
+  params.set("limit", String(limit));
+  params.set("offset", String(state.filaOffset));
+  const qs = params.toString();
+  const data = await apiCall("/findings?" + qs);
+  state.filaCurrent = data.items || [];
+  state.filaTotal = data.total || 0;
+
+  const tbody = $("fila-tbody");
+  tbody.innerHTML = "";
+  $("fila-empty").classList.toggle("hidden", state.filaCurrent.length > 0);
+
+  for (const f of state.filaCurrent) {
+    const tr = document.createElement("tr");
+    if (f.fingerprint === state.selectedFingerprint) tr.classList.add("selected");
+    tr.addEventListener("click", () => openDetail(f.fingerprint));
+
+    // Score
+    tr.appendChild(el("td", {}, el("span", {
+      class: "badge badge-score",
+      title: (f.score_componentes
+        ? "severidade=" + f.score_componentes.peso_severidade
+          + " × exposicao=" + f.score_componentes.fator_exposicao
+          + " × criticidade=" + f.score_componentes.fator_criticidade
+          + (f.score_componentes.fator_ia !== 1 ? " × ia=" + f.score_componentes.fator_ia : "")
+        : ""),
+    }, String(f.score ?? "0"))));
+
+    tr.appendChild(el("td", {}, sevBadge(f.severidade)));
+    tr.appendChild(el("td", {}, statusBadge(f.status || "novo")));
+
+    // Ativo
+    const tdAtivo = el("td");
+    const atv = f.ativo;
+    if (atv) {
+      tdAtivo.appendChild(el("div", { style: "font-size:12px;font-weight:600" }, atv.nome || atv.repositorio));
+      const badges = el("div", { class: "cell-badges", style: "margin-top:3px" });
+      badges.appendChild(tipoBadge(atv.tipo));
+      badges.appendChild(expBadge(atv.exposicao));
+      tdAtivo.appendChild(badges);
+    } else {
+      tdAtivo.appendChild(el("span", { class: "text-dim text-small" }, f.repositorio || "—"));
+    }
+    tr.appendChild(tdAtivo);
+
+    // Regra
+    const tdRegra = el("td");
+    tdRegra.appendChild(el("div", { style: "font-family:monospace;font-size:12px;font-weight:600;word-break:break-all" }, f.regra || "—"));
+    if (f.possivel_segredo) {
+      tdRegra.appendChild(el("div", { class: "cell-badges", style: "margin-top:3px" },
+        el("span", { class: "badge badge-segredo" }, "⚠ segredo")));
+    }
+    tr.appendChild(tdRegra);
+
+    // Arquivo:linha
+    const tdArq = el("td");
+    tdArq.appendChild(el("div", { class: "cell-code" }, (f.arquivo || "—") + (f.linha ? ":" + f.linha : "")));
+    tr.appendChild(tdArq);
+
+    // Scanner
+    tr.appendChild(el("td", {}, el("span", { class: "text-small" }, f.ferramenta || "—")));
+
+    // Tipo scan
+    tr.appendChild(el("td", {}, f.tipo_scan ? el("span", { class: "badge badge-scan" }, f.tipo_scan.toUpperCase()) : el("span", { class: "text-dim text-small" }, "—")));
+
+    // Ação (abrir)
+    tr.appendChild(el("td", {}, el("span", { class: "text-dim text-small" }, "→")));
+
+    tbody.appendChild(tr);
+  }
+
+  // Paginação
+  const total = state.filaTotal;
+  const offset = state.filaOffset;
+  const ate = Math.min(offset + limit, total);
+  const de = total === 0 ? 0 : offset + 1;
+  setText("pagination-info", de + "–" + ate + " de " + total + " findings");
+  $("prev-page").disabled = offset === 0;
+  $("next-page").disabled = offset + limit >= total;
+}
+
+function paginaAnterior() {
+  const limit = parseInt($("filter-limit").value, 10);
+  state.filaOffset = Math.max(0, state.filaOffset - limit);
+  loadFila();
+}
+function proximaPagina() {
+  const limit = parseInt($("filter-limit").value, 10);
+  state.filaOffset = Math.min(state.filaTotal, state.filaOffset + limit);
+  loadFila();
+}
+
+/* =========================================================
+   DETAIL DRAWER
+   ========================================================= */
+function openDrawer() {
+  $("drawer").classList.add("open");
+  $("drawer-backdrop").classList.add("open");
+  document.body.style.overflow = "hidden";
+}
+function closeDrawer() {
+  $("drawer").classList.remove("open");
+  $("drawer-backdrop").classList.remove("open");
+  document.body.style.overflow = "";
+  state.selectedFingerprint = null;
+  // limpa seleção
+  document.querySelectorAll("#fila-tbody tr").forEach(tr => tr.classList.remove("selected"));
+}
+
+// Chamadas de IA/triagem podem terminar com o drawer já fechado pelo usuário;
+// reabri-lo com fingerprint null geraria um GET /findings/null.
+async function refreshDetailSeAindaSelecionado(fingerprint) {
+  if (state.selectedFingerprint !== fingerprint) return;
+  await openDetail(fingerprint);
+}
+
+async function openDetail(fingerprint) {
+  state.selectedFingerprint = fingerprint;
+  document.querySelectorAll("#fila-tbody tr").forEach(tr => {
+    const item = state.filaCurrent.find(f => f.fingerprint === fingerprint);
+    const matches = tr.querySelector(".cell-code")?.textContent?.startsWith(item?.arquivo || "") &&
+                    tr.querySelector(".badge-score");
+    // melhor: reconstrua a seleção usando os items carregados
+  });
+  // Marca selecionado baseado em fingerprint no state
+  const rows = document.querySelectorAll("#fila-tbody tr");
+  rows.forEach(r => r.classList.remove("selected"));
+  const idx = state.filaCurrent.findIndex(f => f.fingerprint === fingerprint);
+  if (idx >= 0 && rows[idx]) rows[idx].classList.add("selected");
+
+  openDrawer();
+  setText("detail-title", "Carregando...");
+  setText("detail-subtitle", "");
+  $("detail-badges").textContent = "";
+  $("detail-score").innerHTML = '<span class="loading"></span>';
+  $("detail-info").innerHTML = "";
+  $("detail-message-section").style.display = "none";
+  $("detail-evidence-section").style.display = "none";
+  $("detail-ai-section").style.display = "none";
+  $("detail-remediation-section").style.display = "none";
+  $("detail-asset-section").style.display = "none";
+
+  try {
+    const f = await apiCall("/findings/" + encodeURIComponent(fingerprint));
+    renderDetail(f);
+  } catch (err) {
+    setText("detail-title", "Erro");
+    setText("detail-subtitle", err.message);
+    $("detail-score").textContent = "—";
+  }
+}
+
+function renderDetail(f) {
+  // Badges do topo
+  const badges = $("detail-badges");
+  badges.innerHTML = "";
+  badges.appendChild(sevBadge(f.severidade));
+  badges.appendChild(statusBadge(f.status || "novo"));
+  if (f.tipo_scan) badges.appendChild(el("span", { class: "badge badge-scan" }, f.tipo_scan.toUpperCase()));
+  if (f.possivel_segredo) badges.appendChild(el("span", { class: "badge badge-segredo" }, "⚠ segredo"));
+  if (f.sla?.aplicavel) {
+    badges.appendChild(el("span", {
+      class: "badge " + (f.sla.atrasado ? "badge-segredo" : "badge-scan"),
+    }, f.sla.atrasado
+      ? "⚠ SLA atrasado " + Math.abs(f.sla.dias_restantes) + "d"
+      : "SLA " + f.sla.dias_restantes + "d restantes"));
+  }
+  if (f.ferramenta) badges.appendChild(el("span", { class: "badge badge-scan" }, f.ferramenta));
+
+  setText("detail-title", f.regra || "Finding sem regra");
+  setText("detail-subtitle", (f.repositorio ? f.repositorio + " • " : "") +
+    fmtDate(f.primeira_vez) + " (primeira vez)");
+
+  // Score
+  const sc = f.score_componentes || {};
+  const scoreDiv = $("detail-score");
+  scoreDiv.innerHTML = "";
+  const rows = [
+    ["Peso severidade (" + (f.severidade || "UNKNOWN") + ")", sc.peso_severidade ?? "—"],
+    ["× Fator exposição (" + (f.ativo?.exposicao || "interna") + ")", sc.fator_exposicao ?? "—"],
+    ["× Fator criticidade (" + (f.ativo?.criticidade ?? 3) + "/5)", sc.fator_criticidade ?? "—"],
+  ];
+  if (sc.fator_ia != null && sc.fator_ia !== 1) {
+    rows.push(["× Fator IA (FP sugerido)", sc.fator_ia]);
+  }
+  for (const [k, v] of rows) {
+    scoreDiv.appendChild(el("div", { class: "score-row" }, [
+      el("span", { class: "text-dim" }, k),
+      el("span", { class: "cell-mono" }, String(v)),
+    ]));
+  }
+  scoreDiv.appendChild(el("div", { class: "score-row total" }, [
+    el("span", {}, "Score final"),
+    el("span", {}, String(f.score ?? 0)),
+  ]));
+  scoreDiv.appendChild(el("div", { class: "score-formula" },
+    "score = severidade × exposição × criticidade" +
+    (sc.fator_ia != null && sc.fator_ia !== 1 ? " × ia" : "") +
+    (f.status === "falso_positivo" || f.status === "corrigido" ? " (zerado por status)" : "")));
+
+  // Info grid
+  const info = [
+    ["Fingerprint", el("span", { class: "cell-mono" }, f.fingerprint?.slice(0, 16) + "…" || "—")],
+    ["Status", f.status || "novo"],
+    ["Ferramenta", f.ferramenta || "—"],
+    ["Tipo de scan", f.tipo_scan || "—"],
+    ["Origem", f.origem || "—"],
+    ["Arquivo", f.arquivo || "—"],
+    ["Linha", f.linha ? String(f.linha) : "—"],
+    ["Repositório", f.repositorio || "—"],
+    ["Primeira vez", fmtDate(f.primeira_vez)],
+    ["Última vez", fmtDate(f.ultima_vez)],
+    ["SLA (prazo)", f.sla?.aplicavel ? f.sla.sla_dias + " dias" : "não aplicável"],
+    ["Data limite SLA", f.sla?.aplicavel ? f.sla.data_limite : "—"],
+    ["Fechado auto.", f.fechado_automaticamente_em ? fmtDate(f.fechado_automaticamente_em) : "—"],
+  ];
+  const grid = $("detail-info");
+  grid.innerHTML = "";
+  for (const [k, v] of info) {
+    grid.appendChild(el("div", { class: "dt" }, k));
+    const val = typeof v === "string" || typeof v === "number" ? document.createTextNode(String(v)) : v;
+    grid.appendChild(el("div", { class: "dd" }, [val]));
+  }
+
+  // Mensagem
+  if (f.mensagem) {
+    $("detail-message-section").style.display = "";
+    const dm = $("detail-message");
+    dm.textContent = "";
+    const msgDiv = el("div", {
+      style: "background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:12px;font-size:13px;white-space:pre-wrap;word-break:break-word",
+    });
+    msgDiv.textContent = f.mensagem;
+    dm.appendChild(msgDiv);
+  }
+
+  // Evidência
+  if (f.trecho) {
+    $("detail-evidence-section").style.display = "";
+    const pre = $("detail-evidence");
+    pre.textContent = f.trecho;
+  }
+
+  // Sugestão IA
+  if (f.sugestao_ia) {
+    $("detail-ai-section").style.display = "";
+    const ai = $("detail-ai");
+    ai.innerHTML = "";
+    const wrap = el("div", { class: "ai-suggestion" });
+    const head = el("div", { class: "ai-head" });
+    head.appendChild(document.createTextNode("🤖 " + (f.sugestao_ia || "")));
+    if (f.confianca_ia != null) {
+      head.appendChild(el("span", { style: "color:var(--text-dim);font-weight:500" },
+        "• confiança " + f.confianca_ia + "/10"));
+    }
+    wrap.appendChild(head);
+    if (f.justificativa_ia) {
+      const j = el("div", { style: "font-size:13px;color:var(--text);white-space:pre-wrap;word-break:break-word" });
+      j.textContent = f.justificativa_ia;
+      wrap.appendChild(j);
+    }
+    if (f.sugestao_ia_gerada_em) {
+      wrap.appendChild(el("div", { class: "text-small text-dim", style: "margin-top:6px" },
+        "Gerado em " + fmtDate(f.sugestao_ia_gerada_em)));
+    }
+    ai.appendChild(wrap);
+  }
+
+  // Remediação IA
+  if (f.remediacao_ia) {
+    $("detail-remediation-section").style.display = "";
+    const rem = $("detail-remediation");
+    rem.innerHTML = "";
+    const box = el("div", {
+      style: "background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:12px;font-size:13px;white-space:pre-wrap;word-break:break-word",
+    });
+    box.textContent = f.remediacao_ia;
+    rem.appendChild(box);
+    if (f.remediacao_ia_gerada_em) {
+      rem.appendChild(el("div", { class: "text-small text-dim", style: "margin-top:6px" },
+        "Gerado em " + fmtDate(f.remediacao_ia_gerada_em)));
+    }
+  }
+
+  // Ativo
+  if (f.ativo) {
+    $("detail-asset-section").style.display = "";
+    const ag = $("detail-asset");
+    ag.innerHTML = "";
+    const ativo = f.ativo;
+    const ativoRows = [
+      ["Nome", ativo.nome || ativo.repositorio || "—"],
+      ["Repositório", ativo.repositorio || "—"],
+      ["Tipo", ativo.tipo || "webapp"],
+      ["Exposição", ativo.exposicao || "interna"],
+      ["Criticidade", criticidadeStars(ativo.criticidade) + " (" + (ativo.criticidade ?? 3) + "/5)"],
+      ["URL alvo", ativo.url_alvo || "—"],
+      ["Criado em", fmtDate(ativo.criado_em)],
+    ];
+    for (const [k, v] of ativoRows) {
+      ag.appendChild(el("div", { class: "dt" }, k));
+      ag.appendChild(el("div", { class: "dd" }, String(v)));
+    }
+  }
+}
+
+async function triarFinding(action) {
+  const fp = state.selectedFingerprint;
+  if (!fp) return;
+  try {
+    const response = await apiCall("/findings/" + encodeURIComponent(fp) + "/status", {
+      method: "POST",
+      body: JSON.stringify({ status: action }),
+    });
+    const labels = {
+      novo: "Reaberto como novo",
+      confirmado: "Marcado como confirmado",
+      falso_positivo: "Marcado como falso positivo",
+      corrigido: "Marcado como corrigido",
+    };
+    const ticket = response.ticket;
+    if (action === "confirmado" && ticket) {
+      if (ticket.criada) {
+        showToast("Issue criada: " + ticket.issue_url, "success", 6000);
+      } else if (ticket.reaberta) {
+        showToast("Issue reaberta no GitHub: " + ticket.issue_url, "success", 6000);
+      } else if (ticket.atualizada) {
+        showToast("Issue atualizada com os detalhes sanitizados: " + ticket.issue_url, "success", 6000);
+      } else if (ticket.reconciliada) {
+        showToast("Issue já vinculada: " + ticket.issue_url, "success", 6000);
+      } else if (ticket.dry_run) {
+        showToast("Dry-run: issue elegível, mas não enviada ao GitHub.", "info", 5000);
+      } else if (ticket.erro) {
+        showToast("Falha ao criar issue: " + ticket.erro, "error", 6000);
+      } else if (ticket.em_andamento) {
+        showToast("Criação da issue já está em andamento.", "info");
+      } else if (ticket.motivo === "severidade_nao_critica") {
+        showToast("Sem issue: tickets são criados apenas para findings CRITICAL.", "info", 5000);
+      } else if (ticket.motivo === "tickets_desativados") {
+        showToast("Tickets GitHub estão desativados.", "info");
+      } else if (ticket.motivo === "token_ausente") {
+        showToast("Issue não criada: configure ELMA_GITHUB_TOKEN.", "error", 5000);
+      } else {
+        showToast(labels[action] || "Status atualizado", "success");
+      }
+    } else {
+      showToast(labels[action] || "Status atualizado", "success");
+    }
+    // Recarrega detalhe e fila e postura
+    await refreshDetailSeAindaSelecionado(fp);
+    await loadFila();
+    await loadPostura();
+    await loadMetricas();
+  } catch (err) {
+    showToast(err.message || "Erro ao triar", "error");
+  }
+}
+
+async function analisarIaAtual() {
+  const cfg = currentAIConfig();
+  const fp = state.selectedFingerprint;
+  if (!fp) {
+    const fingerprints = (state.filaCurrent || []).map(f => f.fingerprint).filter(Boolean);
+    if (!fingerprints.length) {
+      showToast("Selecione um finding ou filtra a fila antes de pedir análise IA.", "info", 4000);
+      return;
+    }
+  }
+  if (state.aiBusy) return;
+  setAIRequestBusy(true, "analysis");
+  try {
+    if (!fp) {
+      const fingerprints = (state.filaCurrent || []).map(f => f.fingerprint).filter(Boolean);
+      const result = await apiCall("/findings/analyze", {
+        method: "POST",
+        body: JSON.stringify({ fingerprints, ...cfg }),
+        timeoutMs: 120000,
+      });
+      const indeterminados = (result.items || []).filter(item => item.sugestao === "indeterminado").length;
+      const resumo = indeterminados
+        ? `${result.updated} findings atualizados; ${indeterminados} indeterminados`
+        : `${result.updated} findings analisados`;
+      showToast(`IA: ${resumo} (${cfg.provider}/${cfg.model}).`, indeterminados ? "info" : "success", 5000);
+      await refreshAll();
+      return;
+    }
+    const result = await apiCall("/findings/" + encodeURIComponent(fp) + "/analyze", {
+      method: "POST",
+      body: JSON.stringify(cfg),
+      timeoutMs: 120000,
+    });
+    const sugestao = result.result?.sugestao;
+    const indeterminado = sugestao === "indeterminado";
+    showToast(
+      sugestao
+        ? `Resultado: ${sugestao} (${cfg.provider}/${cfg.model}).`
+        : `Análise concluída (${cfg.provider}/${cfg.model}).`,
+      indeterminado ? "info" : "success",
+      5000,
+    );
+    await refreshDetailSeAindaSelecionado(fp);
+    await loadFila();
+    await loadPostura();
+  } catch (err) {
+    showToast(err.message || "Erro ao analisar achado", "error");
+  } finally {
+    setAIRequestBusy(false);
+  }
+}
+
+async function remediarIaAtual() {
+  const cfg = currentAIConfig();
+  const fp = state.selectedFingerprint;
+  if (!fp) {
+    showToast("Abra um finding para gerar a remediação.", "info", 4000);
+    return;
+  }
+  if (state.aiBusy) return;
+  setAIRequestBusy(true, "remediation");
+  try {
+    const result = await apiCall("/findings/" + encodeURIComponent(fp) + "/remediate", {
+      method: "POST",
+      body: JSON.stringify(cfg),
+      timeoutMs: 120000,
+    });
+    showToast(`Remediação gerada com ${cfg.provider}/${cfg.model}.`, "success", 4000);
+    await refreshDetailSeAindaSelecionado(fp);
+  } catch (err) {
+    showToast(err.message || "Erro ao gerar remediação", "error");
+  } finally {
+    setAIRequestBusy(false);
+  }
+}
+
+function setAIRequestBusy(busy, action = null) {
+  state.aiBusy = busy;
+  const buttons = document.querySelectorAll(
+    '#ai-analyze-batch, [data-action="ai-analyze"], [data-action="ai-remediate"]',
+  );
+  for (const button of buttons) {
+    if (!button.dataset.idleText) button.dataset.idleText = button.textContent;
+    button.disabled = busy;
+    if (!busy) {
+      button.textContent = button.dataset.idleText;
+    } else if (
+      (action === "analysis" && button.dataset.action !== "ai-remediate") ||
+      (action === "remediation" && button.dataset.action === "ai-remediate")
+    ) {
+      button.textContent = "Aguardando IA...";
+    }
+  }
+  $("ai-provider").disabled = busy;
+  $("ai-model").disabled = busy;
+}
+
+/* =========================================================
+   REFRESH ALL
+   ========================================================= */
+async function refreshAll() {
+  const btn = $("refresh-btn");
+  if (btn) btn.disabled = true;
+  try {
+    await Promise.all([loadPostura(), loadAtivos(), loadMetricas()]);
+    await loadFila();
+    setText("refresh-time", "Atualizado em " + new Date().toLocaleTimeString("pt-BR"));
+  } catch (err) {
+    showToast(err.message || "Erro ao carregar dados", "error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+/* =========================================================
+   BIND EVENTS
+   ========================================================= */
+document.addEventListener("DOMContentLoaded", () => {
+  // Login
+  $("login-btn").addEventListener("click", doLogin);
+  $("api-key-input").addEventListener("keydown", (e) => { if (e.key === "Enter") doLogin(); });
+
+  // Header
+  $("logout-btn").addEventListener("click", logout);
+  $("refresh-btn").addEventListener("click", refreshAll);
+
+  // Drawer
+  $("drawer-close").addEventListener("click", closeDrawer);
+  $("drawer-backdrop").addEventListener("click", closeDrawer);
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && $("drawer").classList.contains("open")) closeDrawer();
+  });
+
+  $("ai-provider").addEventListener("change", () => {
+    const provider = $("ai-provider").value;
+    const available = preencherModelos(provider);
+    const env = modeloEnv(provider);
+    $("ai-model").value = (env && available.includes(env)) ? env : available[0];
+    localStorage.setItem("elma_ai_provider", provider);
+    localStorage.setItem("elma_ai_model", $("ai-model").value);
+  });
+  $("ai-model").addEventListener("change", () => {
+    localStorage.setItem("elma_ai_model", $("ai-model").value);
+  });
+  $("ai-analyze-batch").addEventListener("click", analisarIaAtual);
+
+  // Botões de triagem no drawer
+  document.querySelectorAll(".drawer-footer [data-action]").forEach(btn => {
+    btn.addEventListener("click", () => triarFinding(btn.dataset.action));
+  });
+
+  const analyzeAction = document.createElement("button");
+  analyzeAction.className = "btn btn-secondary";
+  analyzeAction.dataset.action = "ai-analyze";
+  analyzeAction.textContent = "🤖 Analisar com IA";
+  analyzeAction.addEventListener("click", analisarIaAtual);
+  $("drawer").querySelector(".drawer-footer").appendChild(analyzeAction);
+
+  const remediarAction = document.createElement("button");
+  remediarAction.className = "btn btn-secondary";
+  remediarAction.dataset.action = "ai-remediate";
+  remediarAction.textContent = "🛠️ Remediar com IA";
+  remediarAction.addEventListener("click", remediarIaAtual);
+  $("drawer").querySelector(".drawer-footer").appendChild(remediarAction);
+
+  // Filtros da fila — atualizam ao mudar
+  const filtrosIds = ["filter-status","filter-severity","filter-tipo-scan",
+                      "filter-repositorio","filter-exposicao","filter-criticidade","filter-segredo","filter-atrasado"];
+  for (const id of filtrosIds) {
+    $(id).addEventListener("change", () => { state.filaOffset = 0; loadFila(); });
+  }
+  $("filter-limit").addEventListener("change", () => { state.filaOffset = 0; loadFila(); });
+  $("prev-page").addEventListener("click", paginaAnterior);
+  $("next-page").addEventListener("click", proximaPagina);
+
+  // Se já tem chave, entra direto
+  if (apiKey()) {
+    showApp();
+    loadAIConfig().then(() => refreshAll()).catch(() => showToast("Não foi possível carregar as opções de IA.", "info"));
+  } else {
+    showLogin();
+  }
+});
+</script>
+</body>
+</html>
