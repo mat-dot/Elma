@@ -59,7 +59,7 @@ flowchart LR
 
 ```bash
 git clone https://github.com/mat-dot/Elma
-cd https://github.com/mat-dot/Elma
+cd Elma
 python -m pip install -r requirements.txt
 cp .env.example .env   # ajuste as variáveis
 ```
