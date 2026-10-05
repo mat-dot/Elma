@@ -5,10 +5,10 @@ A Elma recebe relatórios SARIF (Semgrep, Trivy e qualquer scanner compatível),
 
 > Projeto do desafio ASPM + IA (FIAP Pride 2026).
 
-Realizado por:
-Mateus Dias Melo RM: 573692
-Rodrigo
-Lucas
+Realizado por:  
+Mateus Dias Melo RM: 573692  
+Rodrigo  
+Lucas  
 
 ---
 
