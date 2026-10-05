@@ -231,4 +231,4 @@ elma_api.py       # entry point de compatibilidade (uvicorn elma_api:app)
 
 ## Licença
 
-Defina a licença do projeto (por exemplo MIT) e adicione o arquivo `LICENSE`.
+ GPL V3, confira `LICENSE.md`
