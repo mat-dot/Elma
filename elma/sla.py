@@ -1,3 +1,8 @@
+# Elma ASPM - Challenge FIAP x PRIDE 2026
+# Copyright (C) 2026 Equipe Abutres
+# SPDX-License-Identifier: BSD-3-Clause
+# Licenciado sob BSD 3-Clause. Veja o arquivo LICENSE.md.
+
 """SLA de remediação derivado por severidade, sem persistência.
 
 Inspirado no DefectDojo: cada severidade tem um prazo em dias contado a
