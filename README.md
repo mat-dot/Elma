@@ -231,4 +231,4 @@ elma_api.py       # entry point de compatibilidade (uvicorn elma_api:app)
 
 ## Licença
 
- GPL V3, confira `LICENSE.md`
+ BSD, confira `LICENSE.md`
