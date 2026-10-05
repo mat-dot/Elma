@@ -4,6 +4,7 @@
 A Elma recebe relatórios SARIF (Semgrep, Trivy e qualquer scanner compatível), deduplica os findings, guarda o histórico em SQLite e devolve um veredito de CI. Triagem, SLA, métricas, tickets e IA consultiva ficam por cima, sem nunca mudar a decisão do gate.
 
 > Projeto do desafio ASPM + IA (FIAP Pride 2026).
+
 Realizado por:
 Mateus Dias Melo RM: 573692
 Rodrigo
