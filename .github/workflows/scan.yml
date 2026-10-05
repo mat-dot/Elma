@@ -1,5 +1,7 @@
 # Elma ASPM - Challenge FIAP x PRIDE 2026
-# Licenca: veja o arquivo LICENSE.md na raiz do repositorio.
+# Copyright (C) 2026 Equipe Abutres
+# SPDX-License-Identifier: BSD-3-Clause
+# Licenciado sob BSD 3-Clause. Veja o arquivo LICENSE.md.
 
 name: Security Scan
 
