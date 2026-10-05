@@ -58,8 +58,8 @@ flowchart LR
 ## Início rápido
 
 ```bash
-git clone <seu-repo>
-cd <seu-repo>
+git clone https://github.com/mat-dot/Elma
+cd https://github.com/mat-dot/Elma
 python -m pip install -r requirements.txt
 cp .env.example .env   # ajuste as variáveis
 ```
