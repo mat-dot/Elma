@@ -72,9 +72,14 @@ class TicketTests(unittest.TestCase):
 
     def test_creation_policy_requires_confirmation_repository_and_activation(self):
         self.assertTrue(deve_criar_issue(self.finding, self.config))
-        self.assertFalse(
+        self.assertTrue(
             deve_criar_issue(
                 self.finding | {"severidade": "HIGH"}, self.config
+            )
+        )
+        self.assertFalse(
+            deve_criar_issue(
+                self.finding | {"severidade": "MEDIUM"}, self.config
             )
         )
         self.assertFalse(
