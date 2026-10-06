@@ -7,7 +7,11 @@ name: Security Scan
 
 on:
   push:
+  pull_request:
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   scan:
@@ -23,7 +27,7 @@ jobs:
         continue-on-error: true
 
       - name: Rodar Trivy SCA (SARIF)
-        uses: aquasecurity/trivy-action@0.35.0 
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scanners: vuln
@@ -32,7 +36,7 @@ jobs:
         continue-on-error: true
 
       - name: Rodar Trivy secrets (SARIF)
-        uses: aquasecurity/trivy-action@0.35.0 
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scanners: secret
@@ -41,7 +45,7 @@ jobs:
         continue-on-error: true
 
       - name: Rodar Trivy IaC (SARIF)
-        uses: aquasecurity/trivy-action@0.35.0 
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scanners: misconfig
@@ -64,64 +68,11 @@ jobs:
           ELMA_API_URL: ${{ secrets.ELMA_API_URL }}
           ELMA_API_KEY: ${{ secrets.ELMA_API_KEY }}
           REPOSITORIO: ${{ github.repository }}
+          FECHAR_AUSENTES: ${{ github.ref_name == github.event.repository.default_branch }}
+          FAIL_ON: HIGH
         run: |
-          set -e
-          reprovado=0
-          enviados=0
-
-          for entrada in \
-            "semgrep.sarif:sast" \
-            "trivy-sca.sarif:sca" \
-            "trivy-secrets.sarif:secrets" \
-            "trivy-iac.sarif:iac"; do
-            arquivo="${entrada%%:*}"
-            tipo_scan="${entrada##*:}"
-            if [ ! -s "$arquivo" ]; then
-              echo "Aviso: $arquivo não foi gerado ou está vazio — pulando."
-              continue
-            fi
-
-            echo "== Enviando $arquivo =="
-            jq -n \
-              --slurpfile sarif "$arquivo" \
-              --arg fail_on "HIGH" \
-              --arg repositorio "$REPOSITORIO" \
-              --arg tipo_scan "$tipo_scan" \
-              '{sarif: $sarif[0], fail_on: $fail_on, repositorio: $repositorio, tipo_scan: $tipo_scan}' \
-              > "payload-$arquivo.json"
-
-            http_status=$(curl -sS -o "resposta-$arquivo.json" -w "%{http_code}" \
-              -X POST "$ELMA_API_URL/findings" \
-              -H "Authorization: Bearer $ELMA_API_KEY" \
-              -H "Content-Type: application/json" \
-              -H "ngrok-skip-browser-warning: true" \
-              -d @"payload-$arquivo.json")
-
-            echo "HTTP $http_status"
-            cat "resposta-$arquivo.json"
-            echo ""
-
-            if [ "$http_status" != "200" ]; then
-              echo "Erro ao chamar a Elma pra $arquivo (HTTP $http_status)."
-              reprovado=1
-              continue
-            fi
-            enviados=$((enviados + 1))
-
-            aprovado=$(jq -r '.aprovado' "resposta-$arquivo.json")
-            if [ "$aprovado" != "true" ]; then
-              echo "Elma reprovou os achados de $arquivo."
-              reprovado=1
-            fi
-          done
-
-          if [ "$enviados" -eq 0 ]; then
-            echo "CI reprovado: nenhum relatório SARIF foi aceito pela Elma."
-            reprovado=1
-          fi
-
-          if [ "$reprovado" -eq 1 ]; then
-            echo "CI reprovado: revise os achados acima."
-            exit 1
-          fi
-          echo "CI aprovado pela Elma."
+          bash scripts/enviar_elma.sh \
+            semgrep.sarif:sast \
+            trivy-sca.sarif:sca \
+            trivy-secrets.sarif:secrets \
+            trivy-iac.sarif:iac
