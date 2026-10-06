@@ -898,7 +898,7 @@ async function apiCall(endpoint, options = {}) {
     });
   } catch (err) {
     if (controller && controller.signal.aborted) {
-      throw new Error("A IA excedeu o tempo limite de 120 segundos. Confira o modelo e os logs do servidor.");
+      throw new Error(`A IA excedeu o tempo limite de ${Math.round(timeoutMs / 1000)} segundos. Confira o modelo e os logs do servidor.`);
     }
     throw err;
   } finally {
@@ -1685,8 +1685,10 @@ async function triarFinding(action) {
 async function analisarIaAtual() {
   const cfg = currentAIConfig();
   const fp = state.selectedFingerprint;
+  const fingerprints = !fp
+    ? (state.filaCurrent || []).map(f => f.fingerprint).filter(Boolean).slice(0, 10)
+    : [];
   if (!fp) {
-    const fingerprints = (state.filaCurrent || []).map(f => f.fingerprint).filter(Boolean);
     if (!fingerprints.length) {
       showToast("Selecione um finding ou filtra a fila antes de pedir análise IA.", "info", 4000);
       return;
@@ -1696,18 +1698,34 @@ async function analisarIaAtual() {
   setAIRequestBusy(true, "analysis");
   try {
     if (!fp) {
-      const fingerprints = (state.filaCurrent || []).map(f => f.fingerprint).filter(Boolean);
-      const result = await apiCall("/findings/analyze", {
-        method: "POST",
-        body: JSON.stringify({ fingerprints, ...cfg }),
-        timeoutMs: 120000,
-      });
-      const indeterminados = (result.items || []).filter(item => item.sugestao === "indeterminado").length;
-      const resumo = indeterminados
-        ? `${result.updated} findings atualizados; ${indeterminados} indeterminados`
-        : `${result.updated} findings analisados`;
-      showToast(`IA: ${resumo} (${cfg.provider}/${cfg.model}).`, indeterminados ? "info" : "success", 5000);
+      let feitos = 0;
+      let indeterminados = 0;
+      let falhas = 0;
+      for (let i = 0; i < fingerprints.length; i++) {
+        $("ai-analyze-batch").textContent = `Analisando ${i + 1}/${fingerprints.length}...`;
+        try {
+          const result = await apiCall(
+            "/findings/" + encodeURIComponent(fingerprints[i]) + "/analyze",
+            {
+              method: "POST",
+              body: JSON.stringify(cfg),
+              timeoutMs: 300000,
+            },
+          );
+          feitos++;
+          if (result.result?.sugestao === "indeterminado") indeterminados++;
+        } catch (_) {
+          falhas++;
+        }
+        await loadFila();
+      }
       await refreshAll();
+      const tipoToast = falhas ? "error" : indeterminados ? "info" : "success";
+      showToast(
+        `IA: ${feitos} analisados, ${indeterminados} indeterminados, ${falhas} falhas (${cfg.provider}/${cfg.model}).`,
+        tipoToast,
+        6000,
+      );
       return;
     }
     const result = await apiCall("/findings/" + encodeURIComponent(fp) + "/analyze", {
@@ -1728,7 +1746,7 @@ async function analisarIaAtual() {
     await loadFila();
     await loadPostura();
   } catch (err) {
-    showToast(err.message || "Erro ao analisar achado", "error");
+    showToast(err.message || "Erro ao analisar achado", "error", 8000);
   } finally {
     setAIRequestBusy(false);
   }
