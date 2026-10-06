@@ -1661,7 +1661,7 @@ async function triarFinding(action) {
       } else if (ticket.em_andamento) {
         showToast("Criação da issue já está em andamento.", "info");
       } else if (ticket.motivo === "severidade_nao_critica") {
-        showToast("Sem issue: tickets são criados apenas para findings CRITICAL.", "info", 5000);
+        showToast("Sem issue: tickets são criados apenas para findings CRITICAL ou HIGH.", "info", 5000);
       } else if (ticket.motivo === "tickets_desativados") {
         showToast("Tickets GitHub estão desativados.", "info");
       } else if (ticket.motivo === "token_ausente") {
