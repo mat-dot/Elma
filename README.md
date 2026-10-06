@@ -33,7 +33,7 @@ Scanners geram ruído: o mesmo achado aparece a cada push, falsos positivos volt
 | SLA | Prazo por severidade (derivado, sem migração), com atrasados no relatório, API e painel |
 | Métricas | Aging, MTTR e tendência por dia |
 | Ativos | Cadastro por repositório com tipo, exposição, criticidade e lacunas de tipos de scan |
-| Tickets | Issue no GitHub ao confirmar um finding `CRITICAL` (dry-run por padrão) |
+| Tickets | Issue no GitHub ao confirmar um finding `CRITICAL` ou `HIGH` (dry-run por padrão) |
 | IA consultiva | `suggest-ia` (falso positivo vs. real) e `remediar-ia`, com Gemini ou Ollama local |
 | Guardrails | Mascaramento de segredos/CPF/CNPJ e filtro de prompt injection |
 | Painel | Dashboard web em `/painel` |
@@ -192,14 +192,14 @@ score = peso_severidade × fator_exposição × fator_criticidade × fator_ia
 
 - **Mascaramento de segredos** antes de persistir e antes de enviar a qualquer LLM: atribuições `password/token/api_key/secret`, JSON, senha em URL, chaves AWS, tokens GitHub/Google/Slack, JWT, chaves privadas PEM, CPF e CNPJ.
 - **Prompt injection**: conteúdo de findings é tratado como dado não confiável; frases conhecidas (PT e EN) fazem o texto ser substituído por um placeholder.
-- **Tickets**: findings com possível segredo ou do tipo `secrets` geram issue genérica, sem trecho, regra ou caminho. Texto do scanner é escapado e links são removidos.
+- **Tickets**: findings com possível segredo ou do tipo `secrets` usam título genérico e incluem contexto sanitizado (scanner, regra, local, mensagem e evidência); o valor bruto do segredo é omitido. A remediação da IA é incluída quando disponível. Texto não confiável é escapado e links são removidos.
 - **Comparação de token** em tempo constante e limite de tamanho aplicado durante a leitura do corpo.
 
 Esses controles são heurísticos (mapeados para OWASP LLM01 e LLM02); regex não garante cobertura total.
 
 ## Tickets no GitHub
 
-Ao confirmar manualmente um finding `CRITICAL` (painel, API ou CLI), a Elma cria uma issue no repositório `owner/repo` do próprio finding. A ingestão SARIF nunca cria issue. A criação usa reserva atômica e reconciliação por marcador de fingerprint, e issues são fechadas/reabertas junto com o status do finding.
+Ao confirmar manualmente um finding `CRITICAL` ou `HIGH` (painel, API ou CLI), a Elma cria uma issue no repositório `owner/repo` do próprio finding. Findings sensíveis recebem contexto sanitizado; se houver uma remediação de IA salva, ela é incluída como sugestão consultiva. A ingestão SARIF nunca cria issue. A criação usa reserva atômica e reconciliação por marcador de fingerprint, e issues são fechadas/reabertas junto com o status do finding.
 
 ## Estrutura do projeto
 
