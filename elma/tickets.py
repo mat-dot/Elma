@@ -235,7 +235,7 @@ def _motivo_nao_elegivel(
         return "tickets_desativados"
     if finding.get("status") != "confirmado":
         return "finding_nao_confirmado"
-    if finding.get("severidade") != "CRITICAL":
+    if finding.get("severidade") not in {"CRITICAL", "HIGH"}:
         return "severidade_nao_critica"
     fingerprint = finding.get("fingerprint")
     if not isinstance(fingerprint, str) or not re.fullmatch(r"[a-f0-9]{64}", fingerprint):
